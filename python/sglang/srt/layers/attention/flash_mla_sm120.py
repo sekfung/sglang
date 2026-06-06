@@ -240,30 +240,16 @@ def flash_mla_with_kvcache_sm120(**kwargs):
         )
 
         out, lse = flash_mla_sparse_decode_triton(
-            q,
-            k_cache,
-            indices,
-            topk_length,
-            attn_sink,
-            head_dim_v,
-            softmax_scale,
-            extra_k_cache,
-            extra_indices,
-            extra_topk_length,
+            q, k_cache, indices, topk_length, attn_sink,
+            head_dim_v, softmax_scale,
+            extra_k_cache, extra_indices, extra_topk_length,
         )
         return (out, lse)
 
     out, lse = _sm120_sparse_decode_fwd(
-        q,
-        k_cache,
-        indices,
-        topk_length,
-        attn_sink,
-        head_dim_v,
-        softmax_scale,
-        extra_k_cache,
-        extra_indices,
-        extra_topk_length,
+        q, k_cache, indices, topk_length, attn_sink,
+        head_dim_v, softmax_scale,
+        extra_k_cache, extra_indices, extra_topk_length,
     )
     return (out, lse)
 
@@ -281,7 +267,6 @@ _BYTES_PER_DST_PAGE = (
     _PBS_DST * _NOPE_ROPE_STRIDE + _PBS_DST * _SCALE_STRIDE
 )  # 64*576 + 64*8 = 37376 + 512 = 37888
 # Padded to 576 alignment
-
 _BYTES_PER_DST_PAGE_PADDED = math.ceil(_BYTES_PER_DST_PAGE / 576) * 576  # 37440
 
 # Pre-allocated buffer for page-split output per device (lazily sized).
@@ -429,7 +414,6 @@ def _flash_mla_flashinfer(
         if extra_indices is not None and extra_indices.dim() == 3
         else extra_indices
     )
-
     output = torch.empty(B, H, head_dim_v, dtype=torch.bfloat16, device=dev)
     out_lse = torch.empty(B, H, dtype=torch.float32, device=dev)
 
