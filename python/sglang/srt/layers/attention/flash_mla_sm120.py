@@ -399,21 +399,21 @@ def _flash_mla_flashinfer(
     extra_indices,
     extra_topk_length,
 ):
-    """FlashInfer SM120 sparse MLA via BatchSparseMLAPagedAttentionWrapper.
+    """FlashInfer SM120 sparse MLA via _SparseMLAPagedAttentionRunner.
 
     SGLang SWA pool uses page_size=256 (footer format: 256*576 bytes data + 256*8 bytes scale).
     FlashInfer decode_dsv4 fast path requires page_block_size=64 (footer: 64*576 + 64*8).
     We split 256-token pages into 4 virtual 64-token pages.
     Token indices are invariant under page-split (identity mapping).
     """
-    from flashinfer.sparse_mla_sm120 import BatchSparseMLAPagedAttentionWrapper
+    from flashinfer.mla._sparse_mla_sm120 import _SparseMLAPagedAttentionRunner
 
     B, _, H, D = q.shape  # (batch, 1, num_heads, head_dim)
 
     dev = q.device
     wrapper = _flashinfer_wrapper.get(dev)
     if wrapper is None:
-        wrapper = BatchSparseMLAPagedAttentionWrapper(
+        wrapper = _SparseMLAPagedAttentionRunner(
             d_v=head_dim_v,
             device=dev,
         )
