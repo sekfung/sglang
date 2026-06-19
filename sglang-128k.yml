@@ -1,0 +1,43 @@
+# SGLang 128K 最优配置
+# 硬件: 4×RTX PRO 6000 (96GB)
+# 实测: 6 并发共享前缀 4,196 tok/s, TPOT 92ms, 378s 完成 12 请求
+model-path: /opt/models/deepseek-v4-flash
+tokenizer-path: /opt/models/deepseek-v4-flash
+host: 0.0.0.0
+port: 30000
+
+tp: 4
+attention-backend: dsv4
+kv-cache-dtype: fp8_e4m3
+
+# --- 上下文 ---
+context-length: 131072
+
+# --- 显存 ---
+# 0.70 → pool=1.16M, 128K 可 8 并发 (1.16M/131K≈8.8)
+# indexer buffer: chunk=2048 × 128K/4(CP) ≈ 3GiB, 安全
+mem-fraction-static: 0.70
+
+# --- Prefill ---
+chunked-prefill-size: 2048       # 128K 下 indexer buffer 足够, 2048 比 1024 快 15%
+max-prefill-tokens: 32768        # 单 batch 最大 prefill token 数
+
+# --- Decode ---
+cuda-graph-max-bs: 6             # 6 并发 decode batch
+num-continuous-decode-steps: 16  # 连续 decode 步数, 多轮对话场景加大以减少调度开销
+
+# --- 并发 ---
+max-running-requests: 8          # 最大同时运行请求数
+prefill-max-requests: 4          # 最多 4 个请求并行 prefill
+
+# --- 调度 (共享前缀场景核心) ---
+schedule-policy: dfs-weight      # DFS Weight → KV cache 复用 + 公平性, 多轮对话更均衡
+radix-eviction-policy: lfu       # Least Frequently Used 淘汰
+
+# --- 模型 ---
+tool-call-parser: deepseekv4
+reasoning-parser: deepseek-v4
+
+# --- 稳定性 ---
+watchdog-timeout: 3600
+log-level: info

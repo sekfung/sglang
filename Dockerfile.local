@@ -1,0 +1,99 @@
+# =============================================================================
+# SGLang + FlashInfer Local Build (based on sglang:dev-cu13)
+# =============================================================================
+# Build context: /opt/models (parent of sglang/ and flashinfer/)
+#
+#   docker build -f sglang/Dockerfile.local -t sglang:local /opt/models
+#
+# Mirrors are enabled by default. Disable with --build-arg USE_MIRRORS=0.
+# =============================================================================
+
+FROM m.daocloud.io/docker.io/lmsysorg/sglang:dev-cu13 AS base
+
+# ---------------------------------------------------------------------------
+# Mirror configuration
+# ---------------------------------------------------------------------------
+ARG USE_MIRRORS=1
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ARG HF_ENDPOINT=https://hf-mirror.com
+ARG MAX_JOBS=16
+ARG TORCH_CUDA_ARCH_LIST="9.0;10.0;10.3"
+
+ENV HF_ENDPOINT=${HF_ENDPOINT} \
+    HF_HUB_ENABLE_HF_TRANSFER=1
+
+# ---------------------------------------------------------------------------
+# Pip mirror
+# ---------------------------------------------------------------------------
+RUN if [ "$USE_MIRRORS" = "1" ] && [ -n "$PIP_INDEX_URL" ]; then \
+      python3 -m pip config set global.index-url "$PIP_INDEX_URL"; \
+    fi
+
+# ===========================================================================
+# Stage 2: FlashInfer (built from local source)
+# ===========================================================================
+FROM base AS flashinfer_builder
+
+ARG MAX_JOBS
+ARG TORCH_CUDA_ARCH_LIST
+
+COPY flashinfer/ /src/flashinfer/
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    cd /src/flashinfer \
+    && python3 -m pip install nvidia-cutlass-dsl \
+    && MAX_JOBS=${MAX_JOBS} \
+       TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
+       FLASHINFER_USE_PRECOMPILED=0 \
+       python3 -m pip install --no-build-isolation ".[cu13]"
+
+# ===========================================================================
+# Stage 3: SGLang (built from local source)
+# ===========================================================================
+FROM flashinfer_builder AS sglang_builder
+
+ARG USE_MIRRORS
+ARG HF_ENDPOINT
+
+COPY sglang/ /src/sglang/
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    cd /src/sglang/python \
+    && python3 -m pip install --no-build-isolation -e ".[all]"
+
+# ---------------------------------------------------------------------------
+# Force-reinstall FlashInfer from local source (sglang ".[all]" pulls
+# flashinfer from PyPI which overwrites our locally built version).
+# Use non-editable wheel install so CUDA JIT sources are at the right paths.
+# ---------------------------------------------------------------------------
+RUN --mount=type=cache,target=/root/.cache/pip \
+    cd /src/flashinfer \
+    && python3 -m pip uninstall -y flashinfer flashinfer_python flashinfer_cubin flashinfer_jit_cache 2>/dev/null || true \
+    && MAX_JOBS=${MAX_JOBS} \
+       TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
+       FLASHINFER_USE_PRECOMPILED=0 \
+       python3 -m pip install --no-build-isolation --no-deps .[cu13]
+
+RUN mkdir -p /root/.cache/huggingface /root/.cache/sglang /root/.cache/torch
+
+# ===========================================================================
+# Stage 4: Runtime
+# ===========================================================================
+FROM sglang_builder AS runtime
+
+ARG HF_ENDPOINT
+ARG SGLANG_BUILD_COMMIT=unknown
+ARG SGLANG_IMAGE_TAG=sglang:local
+
+ENV HF_ENDPOINT=${HF_ENDPOINT} \
+    HF_HUB_ENABLE_HF_TRANSFER=1 \
+    SGLANG_BUILD_COMMIT=${SGLANG_BUILD_COMMIT} \
+    SGLANG_IMAGE_TAG=${SGLANG_IMAGE_TAG}
+
+LABEL org.opencontainers.image.source="https://github.com/sekfung/sglang" \
+      org.opencontainers.image.revision="${SGLANG_BUILD_COMMIT}" \
+      org.opencontainers.image.version="${SGLANG_IMAGE_TAG}"
+
+WORKDIR /src/sglang
+
+CMD ["/bin/bash"]

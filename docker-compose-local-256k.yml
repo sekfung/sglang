@@ -1,0 +1,64 @@
+# deepseek-v4-flash 256K — 本地源码 + FlashInfer SM120 MLA
+# 镜像: sglang:local (由 sglang/Dockerfile.local + sglang/Makefile 构建)
+# 启动: docker compose -f docker-compose-local-256k.yml up -d
+# 端口: 30000
+# ⚠️ 与 128K 共用端口, 不可同时运行 (二选一)
+
+services:
+  deepseek-v4-flash-local-256k:
+    image: docker.io/sekfung/sglang:local
+    container_name: deepseek-v4-flash-local-256k
+    privileged: true
+    ipc: host
+    network_mode: host
+    devices:
+      - nvidia.com/gpu=all
+    volumes:
+      - ./:/src/sglang
+      - ../flashinfer:/src/flashinfer
+      - /opt/models:/opt/models
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    shm_size: 128g
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    environment:
+      - TZ=Asia/Shanghai
+      - CUDA_VISIBLE_DEVICES=0,1,2,3
+      - NCCL_IB_DISABLE=1
+      - NCCL_SHM_DISABLE=0
+      - NCCL_P2P_DISABLE=0
+      - NCCL_DEBUG=WARN
+      # DeepSeek V4 优化
+      - SGLANG_OPT_DEEPGEMM_HC_PRENORM=1
+      - SGLANG_OPT_USE_TILELANG_MHC_PRE=1
+      # FlashInfer SM120 稀疏 MLA decode
+      - SGLANG_SM120_FLASHMLA_BACKEND=flashinfer
+      # DeepSeek V4 压缩态 bfloat16 (内存减半)
+      - SGLANG_DSV4_COMPRESS_STATE_DTYPE=bfloat16
+      # FlashInfer paged KV cache (减少数据搬运)
+      - SGLANG_FLASHINFER_USE_PAGED=1
+      # Breakable CUDA Graph (动态 batch size)
+      - SGLANG_USE_BREAKABLE_CUDA_GRAPH=1
+      # 避免碎片化
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
+      - --config
+      - /opt/models/sglang/sglang-256k.yml
+      - --enable-p2p
+      - --trust-remote-code
+      - --enable-cache-report
+      - --enable-metrics
+      - --enable-request-time-stats-logging
+      - --allow-auto-truncate
+      - --enable-prefill-cp
+      - --cp-strategy
+      - interleave
+      - --enable-mixed-chunk
+      - --cuda-graph-backend-decode
+      - breakable
+    restart: unless-stopped

@@ -18,6 +18,7 @@ No torch.compile.
 
 from __future__ import annotations
 
+import dataclasses
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
@@ -151,6 +152,13 @@ class BreakableCudaGraphBackend(DedupedCudaGraphMixin, BaseCudaGraphBackend):
             return tuple(self._slice_output(item, num_tokens) for item in output)
         if isinstance(output, list):
             return [self._slice_output(item, num_tokens) for item in output]
+        if dataclasses.is_dataclass(output):
+            return type(output)(
+                **{
+                    f.name: self._slice_output(getattr(output, f.name), num_tokens)
+                    for f in dataclasses.fields(output)
+                }
+            )
         raise TypeError(f"Unsupported BCG output type: {type(output)}")
 
     def _copy_output_to_buffer(
@@ -189,6 +197,14 @@ class BreakableCudaGraphBackend(DedupedCudaGraphMixin, BaseCudaGraphBackend):
                 )
             for item, buffer in zip(output, output_buffer):
                 self._copy_output_to_buffer(item, buffer, num_tokens)
+            return
+        if dataclasses.is_dataclass(output) and type(output) is type(output_buffer):
+            for f in dataclasses.fields(output):
+                self._copy_output_to_buffer(
+                    getattr(output, f.name),
+                    getattr(output_buffer, f.name),
+                    num_tokens,
+                )
             return
         raise TypeError(
             "Unsupported BCG output buffer pair: "

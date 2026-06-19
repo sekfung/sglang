@@ -1,0 +1,47 @@
+# SGLang 256K 最优配置
+# 硬件: 4×RTX PRO 6000 (96GB)
+# 实测: 6 并发共享前缀 2,391 tok/s, TPOT 325ms, 1,335s 完成 12 请求
+# 关键限制: DSA indexer buffer → chunk 必须 ≤1024, 否则 F.relu(score) OOM
+model-path: /opt/models/deepseek-v4-flash
+tokenizer-path: /opt/models/deepseek-v4-flash
+host: 0.0.0.0
+port: 30000
+
+tp: 4
+attention-backend: dsv4
+kv-cache-dtype: fp8_e4m3
+
+# --- 上下文 ---
+context-length: 262144
+
+# --- 显存 ---
+# 0.67 → pool=967K, 256K 可 3 并发 (967K/262K≈3.7)
+# 共享前缀场景: 前缀只存 1 份, 6 并发实际只占 ~262K KV
+# 再高 mem 会导致 indexer buffer OOM (实测 0.70 在 chunk=2048 时 OOM)
+mem-fraction-static: 0.67
+
+# --- Prefill ---
+# ⚠️ chunk=2048 会触发 F.relu(score) OOM (需要 6-8 GiB indexer buffer)
+# chunk=1024 是 256K 下的安全上限
+chunked-prefill-size: 1024
+max-prefill-tokens: 32768
+
+# --- Decode ---
+cuda-graph-max-bs: 4             # 256K 下 decode batch 受限
+num-continuous-decode-steps: 16  # 连续 decode 步数, 多轮对话场景加大以减少调度开销
+
+# --- 并发 ---
+max-running-requests: 6
+prefill-max-requests: 4
+
+# --- 调度 ---
+schedule-policy: dfs-weight      # DFS Weight → KV cache 复用 + 公平性, 多轮对话更均衡
+radix-eviction-policy: lfu
+
+# --- 模型 ---
+tool-call-parser: deepseekv4
+reasoning-parser: deepseek-v4
+
+# --- 稳定性 ---
+watchdog-timeout: 3600
+log-level: info
