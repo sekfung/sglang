@@ -2255,10 +2255,16 @@ class ServerArgs:
 
             if is_sm120_supported():
                 if self.moe_runner_backend == "auto":
-                    self.moe_runner_backend = "marlin"
-                    logger.info(
-                        "Use marlin as MoE runner backend on SM120 for DeepseekV4"
-                    )
+                    if envs.SGLANG_OPT_USE_SM120_CUTEDSL_MOE.get():
+                        self.moe_runner_backend = "flashinfer_cutedsl"
+                        logger.info(
+                            "Use flashinfer_cutedsl as MoE runner backend on SM120 for DeepseekV4"
+                        )
+                    else:
+                        self.moe_runner_backend = "marlin"
+                        logger.info(
+                            "Use marlin as MoE runner backend on SM120 for DeepseekV4"
+                        )
                 # SM120 lacks tcgen05/TMEM: disable features that depend on
                 # DeepGEMM or require >99KB SMEM (topk_v2).
                 envs.SGLANG_OPT_FP8_WO_A_GEMM.set(False)

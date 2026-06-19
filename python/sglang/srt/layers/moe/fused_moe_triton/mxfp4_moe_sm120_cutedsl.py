@@ -17,7 +17,7 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-_SF_VEC_SIZE = 16  # requant block size (checkpoint has 32, but fp4_quantize C++ kernel requires sf16 for E4M3)
+_SF_VEC_SIZE = 32  # checkpoint MoE block scale size
 _GROUP_SIZE = 16   # E4M3 scale group size (unchanged from nvfp4)
 
 
@@ -72,66 +72,76 @@ def _dequant_and_requant_block(w_uint8, scale_f32, sf_vec_size):
     )
 
 
-def prepare_sm120_cutedsl_weights(layer, *, activation: str = "silu"):
-    """Convert NVFP4-sf32 checkpoint weights to b12x MMA layout.
+def _swizzle_blockscale_sf32(scale_f32):
+    """Swizzle float32 block scales (sf_vec_size=32) to the interleaved 2D
+    layout that ``convert_sf_to_mma_layout`` consumes.
 
-    Stores the packed result on ``layer._sm120_cutedsl_packed``.
+    Mirrors ``swizzle_blockscale`` (which hardcodes sf16), but operates on
+    the K/32 dimension directly.
+    """
+    import math
+    if scale_f32.ndim == 2:
+        scale_f32 = scale_f32.unsqueeze(0)
+    B, M, K32 = scale_f32.shape  # K32 = cols // 32
+    M_pad = ((M + 127) // 128) * 128
+    K_pad = ((K32 + 3) // 4) * 4
+    padded = torch.zeros((B, M_pad, K_pad), dtype=scale_f32.dtype, device=scale_f32.device)
+    padded[:B, :M, :K32] = scale_f32
+    # Convert to float8_e4m3fn (the byte format the MMA converter expects).
+    f8 = padded.clamp(-448, 448).to(torch.float8_e4m3fn)
+    f8 = f8.reshape(B, M_pad // 128, 4, 32, K_pad // 4, 4)
+    swz = f8.permute(0, 1, 4, 3, 2, 5).contiguous()
+    out = swz.reshape(B, M_pad, K_pad)
+    if scale_f32.ndim == 2:
+        out = out.squeeze(0)
+    return out
+
+
+def prepare_sm120_cutedsl_weights(layer, *, activation: str = "silu"):
+    """Convert NVFP4-sf32 checkpoint weights directly to b12x MMA layout.
+
+    No dequant→requant: the block scales are reformatted in-place
+    (float32 E4M3 → float8_e4m3fn → swizzle → MMA 6D).
     """
     from flashinfer.cute_dsl.utils import convert_sf_to_mma_layout
 
-    w13 = layer.w13_weight.data           # [E, 2*n, k/2]  uint8  FP4x2
-    w2  = layer.w2_weight.data            # [E, k,   n/2]  uint8  FP4x2
-    w13_s = layer.w13_weight_scale_inv.data  # [E, 2*n, k/32] float32 E4M3
-    w2_s  = layer.w2_weight_scale_inv.data   # [E, k,   n/32] float32 E4M3
+    w13 = layer.w13_weight.data              # [E, 2*n, k/2]   uint8
+    w2  = layer.w2_weight.data               # [E, k,   n/2]   uint8
+    w13_s = layer.w13_weight_scale_inv.data  # [E, 2*n, k/32]  float32
+    w2_s  = layer.w2_weight_scale_inv.data   # [E, k,   n/32]  float32
 
     num_experts = w13.shape[0]
     device = w13.device
-
-    # Detect format: float8_e8m0fnu needs a different scale conversion.
-    # For DeepSeek-V4-Flash-NVFP4 the scales arrive as float32 (E4M3
-    # reinterpreted by Mxfp4MarlinMoEMethod).
-    if w13_s.dtype != w2_s.dtype:
-        raise RuntimeError(
-            f"w13 and w2 scales have different dtypes: {w13_s.dtype} vs {w2_s.dtype}"
-        )
-
-    # Flatten experts + rows for the batch quantizer.
-    w13_rows = w13.shape[1]  # 2 * intermediate_per_partition
-    w2_rows = w2.shape[1]   # hidden_size
-    hidden_size = w13.shape[2] * 2      # unpacked K
+    w13_rows = w13.shape[1]            # 2 * intermediate_per_partition
+    hidden_size = w13.shape[2] * 2     # unpacked K
+    w2_rows = w2.shape[1]              # hidden_size
     intermediate_size = w2.shape[2] * 2  # unpacked N
 
-    w13_flat = w13.view(num_experts * w13_rows, hidden_size // 2)
-    w2_flat = w2.view(num_experts * w2_rows, intermediate_size // 2)
-    w13_s_flat = w13_s.reshape(num_experts * w13_rows, hidden_size // _SF_VEC_SIZE)
-    w2_s_flat = w2_s.reshape(num_experts * w2_rows, intermediate_size // _SF_VEC_SIZE)
-
-    # Dequant → requant with same sf_vec_size (one-time cost).
-    w13_q, w13_sf_swz = _dequant_and_requant_block(w13_flat, w13_s_flat, _SF_VEC_SIZE)
-    w2_q, w2_sf_swz = _dequant_and_requant_block(w2_flat, w2_s_flat, _SF_VEC_SIZE)
+    # Swizzle the block scales (sf32 → interleaved 2D flat).
+    w13_sf_2d = _swizzle_blockscale_sf32(w13_s.reshape(num_experts * w13_rows, hidden_size // _SF_VEC_SIZE))
+    w2_sf_2d  = _swizzle_blockscale_sf32(w2_s.reshape(num_experts * w2_rows, intermediate_size // _SF_VEC_SIZE))
 
     # Convert to 6D MMA layout.
     w13_sf_mma = convert_sf_to_mma_layout(
-        w13_sf_swz, m=w13_rows, k=hidden_size,
-        num_groups=num_experts, sf_vec_size=_SF_VEC_SIZE,
+        w13_sf_2d.contiguous().view(torch.uint8).reshape(-1),
+        m=w13_rows, k=hidden_size, num_groups=num_experts, sf_vec_size=_SF_VEC_SIZE,
     )
     w2_sf_mma = convert_sf_to_mma_layout(
-        w2_sf_swz, m=w2_rows, k=intermediate_size,
-        num_groups=num_experts, sf_vec_size=_SF_VEC_SIZE,
+        w2_sf_2d.contiguous().view(torch.uint8).reshape(-1),
+        m=w2_rows, k=intermediate_size, num_groups=num_experts, sf_vec_size=_SF_VEC_SIZE,
     )
 
     ones = torch.ones(num_experts, dtype=torch.float32, device=device)
-    fc2_is = torch.ones(1, dtype=torch.float32, device=device)
 
     layer._sm120_cutedsl_packed = type("_Packed", (), {
-        "w13": w13_q.view(num_experts, w13_rows, hidden_size // 2),
+        "w13": w13,
         "w13_scale": w13_sf_mma,
         "w13_global_scale": ones,
-        "w2": w2_q.view(num_experts, w2_rows, intermediate_size // 2),
+        "w2": w2,
         "w2_scale": w2_sf_mma,
         "w2_global_scale": ones,
-        "fc2_input_scale": fc2_is,
-        "workspace": None,  # use dynamic workspace
+        "fc2_input_scale": torch.ones(1, dtype=torch.float32, device=device),
+        "workspace": None,
     })()
     layer._dsv4_mxfp4_backend = "sm120_cutedsl"
 
@@ -169,6 +179,6 @@ def mxfp4_moe_forward_sm120_cutedsl(
         fc2_input_scale=p.fc2_input_scale,
         num_local_experts=p.w13.shape[0],
         activation=activation,
-        quant_mode="nvfp4",
+        quant_mode="nvfp4_sf32",
         output=scatter_output,
     )
