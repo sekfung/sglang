@@ -9,6 +9,7 @@ import torch
 from sglang.srt.layers.moe.moe_runner.base import (
     MoeQuantInfo,
     MoeRunnerConfig,
+    _moe_output_buf,
     register_fused_func,
 )
 from sglang.srt.model_executor.cuda_graph_config import cuda_graph_fully_disabled
@@ -345,16 +346,87 @@ class CuteDslFp4MoeQuantInfo(MoeQuantInfo):
     down_gemm_overlap_args: Optional[DownGemmOverlapArgs] = None
 
 
+@dataclass
+class Sm120CuteDslNvfp4MoeQuantInfo(MoeQuantInfo):
+    """Quantization payload for SM120 b12x NVFP4 fused MoE.
+
+    Weights are prepared once at load time by
+    ``prepare_sm120_cutedsl_nvfp4_weights``. The fused func keeps the forward
+    inside ``MoeRunner.run`` so graph capture and runner-managed output buffers
+    can see the layer.
+    """
+
+    w13_weight: torch.Tensor
+    w13_weight_sf: torch.Tensor
+    w1_alpha: torch.Tensor
+    w2_weight: torch.Tensor
+    w2_weight_sf: torch.Tensor
+    w2_alpha: torch.Tensor
+    fc2_input_scale: torch.Tensor
+    num_experts: int
+    num_local_experts: int
+    top_k: int
+
+
 @register_fused_func("none", "flashinfer_cutedsl")
 def fused_experts_none_to_flashinfer_cutedsl_fp4(
     dispatch_output: StandardDispatchOutput,
-    quant_info: CuteDslFp4MoeQuantInfo,
+    quant_info: MoeQuantInfo,
     runner_config: MoeRunnerConfig,
 ) -> StandardCombineInput:
     from sglang.srt.layers.moe.token_dispatcher.standard import StandardCombineInput
     from sglang.srt.layers.moe.topk import TopKOutputChecker
     from sglang.srt.layers.quantization.fp4_utils import fp4_quantize
 
+    if isinstance(quant_info, Sm120CuteDslNvfp4MoeQuantInfo):
+        from flashinfer import b12x_fused_moe
+
+        hidden_states = dispatch_output.hidden_states
+        topk_output = dispatch_output.topk_output
+        assert TopKOutputChecker.format_is_standard(topk_output)
+
+        topk_ids = topk_output.topk_ids
+        if topk_ids.dtype != torch.int32:
+            topk_ids = topk_ids.to(torch.int32)
+
+        num_tokens, hidden_size = hidden_states.shape
+        output = _moe_output_buf.get()
+        if (
+            output is None
+            or output.shape != (num_tokens, hidden_size)
+            or output.dtype != torch.bfloat16
+            or output.device != hidden_states.device
+        ):
+            output = torch.empty(
+                num_tokens,
+                hidden_size,
+                dtype=torch.bfloat16,
+                device=hidden_states.device,
+            )
+
+        out = b12x_fused_moe(
+            x=hidden_states,
+            w1_weight=quant_info.w13_weight,
+            w1_weight_sf=quant_info.w13_weight_sf,
+            w2_weight=quant_info.w2_weight,
+            w2_weight_sf=quant_info.w2_weight_sf,
+            token_selected_experts=topk_ids,
+            token_final_scales=topk_output.topk_weights,
+            num_experts=quant_info.num_experts,
+            top_k=quant_info.top_k,
+            w1_alpha=quant_info.w1_alpha,
+            w2_alpha=quant_info.w2_alpha,
+            fc2_input_scale=quant_info.fc2_input_scale,
+            num_local_experts=quant_info.num_local_experts,
+            activation=runner_config.activation,
+            quant_mode="nvfp4",
+            output=output,
+        )
+        return StandardCombineInput(hidden_states=out)
+
+    assert isinstance(
+        quant_info, CuteDslFp4MoeQuantInfo
+    ), f"Unexpected quant_info type for flashinfer_cutedsl: {type(quant_info)}"
     assert runner_config.activation == "silu", "Only silu is supported for CuteDSL MoE."
     assert quant_info.wrapper is not None, "CuteDSL v2 path requires CuteDslMoEWrapper."
 

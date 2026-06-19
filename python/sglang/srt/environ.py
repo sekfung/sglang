@@ -798,6 +798,8 @@ class Envs:
     SGLANG_FP8_PAGED_MQA_LOGITS_TORCH = EnvBool(False)
     SGLANG_TOPK_TRANSFORM_512_TORCH = EnvBool(False)
     SGLANG_OPT_FLASHMLA_SPARSE_PREFILL = EnvBool(False)
+    SGLANG_SM120_FLASHMLA_DEBUG = EnvBool(False)
+    SGLANG_SM120_FLASHMLA_REQUIRE_DECODE_FAST_PATH = EnvBool(False)
 
     # SWA radix cache
     # TODO(DSV4): @ispobock this has bug on main branch when retract

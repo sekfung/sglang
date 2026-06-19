@@ -2289,7 +2289,12 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
         moe_runner_backend = get_moe_runner_backend()
 
         if moe_runner_backend.is_auto():
-            if is_cuda() and (8, 0) <= get_device_capability() < (10, 0):
+            if (
+                is_sm120_supported()
+                and envs.SGLANG_OPT_USE_SM120_CUTEDSL_MOE.get()
+            ):
+                moe_runner_backend = MoeRunnerBackend.FLASHINFER_CUTEDSL
+            elif is_cuda() and (8, 0) <= get_device_capability() < (10, 0):
                 moe_runner_backend = MoeRunnerBackend.MARLIN
             else:
                 # TRTLLM is currently the most performant and tested FP4 MoE
@@ -2327,27 +2332,28 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
 
         # SM120 CuTe-DSL NVFP4 fused MoE (opt-in, fastest MoE path on RTX PRO 6000).
         if getattr(layer, "_nvfp4_backend", None) == "sm120_cutedsl":
-            from sglang.srt.layers.moe.fused_moe_triton.nvfp4_moe_sm120_cutedsl import (
-                nvfp4_moe_forward_sm120_cutedsl,
+            from sglang.srt.layers.moe.moe_runner.flashinfer_cutedsl import (
+                Sm120CuteDslNvfp4MoeQuantInfo,
             )
 
-            hidden_states = dispatch_output.hidden_states
-            num_experts = layer.num_experts  # global experts
             if hasattr(dispatch_output, "topk_output"):
                 topk_output = dispatch_output.topk_output
             else:
                 topk_output = dispatch_output  # DeepEP dispatch: fields direct on tuple
-            top_k = topk_output.topk_ids.shape[-1]
-            output = nvfp4_moe_forward_sm120_cutedsl(
-                layer,
-                hidden_states=hidden_states,
-                topk_ids=topk_output.topk_ids,
-                topk_weights=topk_output.topk_weights,
-                num_experts=num_experts,
-                top_k=top_k,
-                activation=activation,
+            p = layer._sm120_cutedsl_nvfp4
+            quant_info = Sm120CuteDslNvfp4MoeQuantInfo(
+                w13_weight=p["w13_weight"],
+                w13_weight_sf=p["w13_sf"],
+                w1_alpha=p["w13_alpha"],
+                w2_weight=p["w2_weight"],
+                w2_weight_sf=p["w2_sf"],
+                w2_alpha=p["w2_alpha"],
+                fc2_input_scale=p["fc2_input_scale"],
+                num_experts=layer.num_experts,
+                num_local_experts=layer.num_local_experts,
+                top_k=topk_output.topk_ids.shape[-1],
             )
-            return StandardCombineInput(hidden_states=output)
+            return self.runner.run(dispatch_output, quant_info)
 
         if moe_runner_backend.is_marlin():
             from sglang.srt.layers.moe.moe_runner.marlin import MarlinMoeQuantInfo

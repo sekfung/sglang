@@ -13,6 +13,7 @@ separate region at the end of each page.
 
 import logging
 import os
+from dataclasses import dataclass
 
 import torch
 import math
@@ -263,8 +264,100 @@ def flash_mla_with_kvcache_sm120(**kwargs):
     return (out, lse)
 
 
-# Lazily initialized FlashInfer wrapper per device (reused across calls).
+@dataclass
+class FlashInferMLADecodeTensors:
+    output: torch.Tensor
+    out_lse: torch.Tensor
+    mid_out: torch.Tensor
+    mid_lse: torch.Tensor
+
+
+class FlashInferMLAWorkspace:
+    """Reusable decode workspace for SM120 FlashInfer sparse MLA.
+
+    CUDA graph replay requires stable tensor storage addresses. This workspace
+    grows to the largest requested shape and returns prefix views for smaller
+    decode batches, avoiding per-forward ``torch.empty`` allocations.
+    """
+
+    def __init__(self, device: torch.device):
+        self.device = torch.device(device)
+        self._output: torch.Tensor | None = None
+        self._out_lse: torch.Tensor | None = None
+        self._mid_out: torch.Tensor | None = None
+        self._mid_lse: torch.Tensor | None = None
+        self._output_dtype: torch.dtype | None = None
+        self._head_dim_v: int | None = None
+        self._mid_out_dtype: torch.dtype | None = None
+        self._mid_out_head_dim_v: int | None = None
+
+    @staticmethod
+    def _needs_capacity(tensor: torch.Tensor | None, shape: tuple[int, ...]) -> bool:
+        return tensor is None or tensor.ndim != len(shape) or any(
+            tensor.size(i) < shape[i] for i in range(len(shape))
+        )
+
+    def get_decode_tensors(
+        self,
+        *,
+        num_tokens: int,
+        num_heads: int,
+        num_splits: int,
+        head_dim_v: int,
+        output_dtype: torch.dtype,
+    ) -> FlashInferMLADecodeTensors:
+        output_shape = (num_tokens, num_heads, head_dim_v)
+        out_lse_shape = (num_tokens, num_heads)
+        mid_out_shape = (num_tokens, num_heads, num_splits, head_dim_v)
+        mid_lse_shape = (num_tokens, num_heads, num_splits)
+
+        if (
+            self._needs_capacity(self._output, output_shape)
+            or self._output_dtype != output_dtype
+            or self._head_dim_v != head_dim_v
+        ):
+            self._output = torch.empty(
+                output_shape, dtype=output_dtype, device=self.device
+            )
+            self._output_dtype = output_dtype
+            self._head_dim_v = head_dim_v
+
+        if self._needs_capacity(self._out_lse, out_lse_shape):
+            self._out_lse = torch.empty(
+                out_lse_shape, dtype=torch.float32, device=self.device
+            )
+
+        if (
+            self._needs_capacity(self._mid_out, mid_out_shape)
+            or self._mid_out_dtype != output_dtype
+            or self._mid_out_head_dim_v != head_dim_v
+        ):
+            self._mid_out = torch.empty(
+                mid_out_shape, dtype=output_dtype, device=self.device
+            )
+            self._mid_out_dtype = output_dtype
+            self._mid_out_head_dim_v = head_dim_v
+
+        if self._needs_capacity(self._mid_lse, mid_lse_shape):
+            self._mid_lse = torch.empty(
+                mid_lse_shape, dtype=torch.float32, device=self.device
+            )
+
+        assert self._output is not None
+        assert self._out_lse is not None
+        assert self._mid_out is not None
+        assert self._mid_lse is not None
+        return FlashInferMLADecodeTensors(
+            output=self._output[:num_tokens, :num_heads, :head_dim_v],
+            out_lse=self._out_lse[:num_tokens, :num_heads],
+            mid_out=self._mid_out[:num_tokens, :num_heads, :num_splits, :head_dim_v],
+            mid_lse=self._mid_lse[:num_tokens, :num_heads, :num_splits],
+        )
+
+
+# Lazily initialized FlashInfer wrapper/workspace per device (reused across calls).
 _flashinfer_wrapper = {}  # device -> wrapper
+_flashinfer_workspace: dict[torch.device, FlashInferMLAWorkspace] = {}
 
 # --- Page-split utilities: pbs=256 → pbs=64 ---
 # SGLang SWA KV cache footer layout per 256-token page:
@@ -287,6 +380,7 @@ _split_buf = {}  # device -> tensor
 
 import triton
 import triton.language as tl
+from sglang.srt.environ import envs
 
 
 @triton.jit
@@ -387,6 +481,82 @@ def _split_kv_pages_to_64(kv_u8: torch.Tensor, src_pbs: int) -> torch.Tensor:
     )
 
 
+_last_flashinfer_debug_signature = None
+_FLASHINFER_DSV4_DECODE_MAX_TOKENS = 64
+
+
+def _flashinfer_dsv4_decode_fast_path_status(
+    *,
+    num_tokens: int,
+    num_heads: int,
+    d_qk: int,
+    topk: int,
+    page_block_size: int,
+    extra_topk: int,
+) -> tuple[bool, str]:
+    if num_tokens > _FLASHINFER_DSV4_DECODE_MAX_TOKENS:
+        return (
+            False,
+            "large-batch sparse MLA path "
+            f"(tokens={num_tokens} > decode_max={_FLASHINFER_DSV4_DECODE_MAX_TOKENS})",
+        )
+
+    try:
+        from flashinfer.mla._sparse_mla_sm120 import (
+            _decode_dsv4_dispatchable,
+        )
+    except Exception as exc:
+        return False, f"cannot import FlashInfer dispatch table: {exc!r}"
+
+    ok = _decode_dsv4_dispatchable(
+        num_tokens, num_heads, topk, d_qk, page_block_size, extra_topk
+    )
+    if ok:
+        return True, "decode_dsv4"
+    return (
+        False,
+        "unsupported decode_dsv4 shape "
+        f"(tokens={num_tokens}, heads={num_heads}, d_qk={d_qk}, "
+        f"topk={topk}, extra_topk={extra_topk}, page_block_size={page_block_size})",
+    )
+
+
+def _maybe_log_or_require_flashinfer_fast_path(
+    *,
+    num_tokens: int,
+    num_heads: int,
+    d_qk: int,
+    topk: int,
+    page_block_size: int,
+    extra_topk: int,
+) -> None:
+    global _last_flashinfer_debug_signature
+    fast_path, reason = _flashinfer_dsv4_decode_fast_path_status(
+        num_tokens=num_tokens,
+        num_heads=num_heads,
+        d_qk=d_qk,
+        topk=topk,
+        page_block_size=page_block_size,
+        extra_topk=extra_topk,
+    )
+    signature = (num_tokens, num_heads, d_qk, topk, extra_topk, page_block_size)
+    if envs.SGLANG_SM120_FLASHMLA_DEBUG.get() and (
+        signature != _last_flashinfer_debug_signature
+    ):
+        _last_flashinfer_debug_signature = signature
+        logger.warning(
+            "SM120 FlashInfer MLA dispatch: fast_path=%s reason=%s",
+            fast_path,
+            reason,
+        )
+    if (
+        envs.SGLANG_SM120_FLASHMLA_REQUIRE_DECODE_FAST_PATH.get()
+        and num_tokens <= _FLASHINFER_DSV4_DECODE_MAX_TOKENS
+        and not fast_path
+    ):
+        raise RuntimeError(f"SM120 FlashInfer MLA fast path required: {reason}")
+
+
 def _flash_mla_flashinfer(
     q,
     k_cache,
@@ -423,6 +593,7 @@ def _flash_mla_flashinfer(
     kv_u8 = k_cache.view(torch.uint8) if k_cache.dtype != torch.uint8 else k_cache
     src_pbs = k_cache.shape[1] if k_cache.ndim >= 3 else _PBS_SRC
     kv_64 = _split_kv_pages_to_64(kv_u8, src_pbs) if src_pbs != _PBS_DST else kv_u8
+    kv_pbs = kv_64.shape[1] if kv_64.ndim >= 3 else _PBS_DST
 
     extra_kv_u8 = (
         extra_k_cache.view(torch.uint8)
@@ -442,35 +613,47 @@ def _flash_mla_flashinfer(
         else extra_indices
     )
 
-    output = torch.empty(B, H, head_dim_v, dtype=torch.bfloat16, device=q.device)
-    out_lse = torch.empty(B, H, dtype=torch.float32, device=q.device)
-
     # Pre-allocate split-K scratch for decode-dsv4 fast path.
     topk = idx.shape[-1]
     extra_topk = extra_idx.shape[-1] if extra_idx is not None else 0
+    _maybe_log_or_require_flashinfer_fast_path(
+        num_tokens=B,
+        num_heads=H,
+        d_qk=D,
+        topk=topk,
+        page_block_size=kv_pbs,
+        extra_topk=extra_topk,
+    )
     _BI = 64
     num_splits = (topk + _BI - 1) // _BI + (
         (extra_topk + _BI - 1) // _BI if extra_topk > 0 else 0
     )
-    mid_out = torch.empty(
-        B, H, num_splits, head_dim_v, dtype=torch.bfloat16, device=q.device
+    workspace = _flashinfer_workspace.get(dev)
+    if workspace is None:
+        workspace = FlashInferMLAWorkspace(dev)
+        _flashinfer_workspace[dev] = workspace
+    tensors = workspace.get_decode_tensors(
+        num_tokens=B,
+        num_heads=H,
+        num_splits=num_splits,
+        head_dim_v=head_dim_v,
+        output_dtype=torch.bfloat16,
     )
-    mid_lse = torch.empty(B, H, num_splits, dtype=torch.float32, device=q.device)
 
     wrapper.run(
         q=q,  # (B, 1, H, D) — wrapper handles squeeze
         kv_cache=kv_64,
         indices=idx,
-        output=output,
+        output=tensors.output,
         sm_scale=softmax_scale,
         topk_length=topk_length,
         attn_sink=attn_sink,
         extra_kv_cache=extra_kv_64,
         extra_indices=extra_idx,
         extra_topk_length=extra_topk_length,
-        out_lse=out_lse,
-        mid_out=mid_out,
-        mid_lse=mid_lse,
+        out_lse=tensors.out_lse,
+        mid_out=tensors.mid_out,
+        mid_lse=tensors.mid_lse,
     )
 
-    return (output.unsqueeze(1), None)
+    return (tensors.output.unsqueeze(1), None)

@@ -17,7 +17,7 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-_SF_VEC_SIZE = 32  # checkpoint MoE block scale size
+_SF_VEC_SIZE = 16  # requant block size (checkpoint has 32, but fp4_quantize C++ kernel requires sf16 for E4M3)
 _GROUP_SIZE = 16   # E4M3 scale group size (unchanged from nvfp4)
 
 
@@ -169,6 +169,6 @@ def mxfp4_moe_forward_sm120_cutedsl(
         fc2_input_scale=p.fc2_input_scale,
         num_local_experts=p.w13.shape[0],
         activation=activation,
-        quant_mode="nvfp4-32",
+        quant_mode="nvfp4",
         output=scatter_output,
     )
