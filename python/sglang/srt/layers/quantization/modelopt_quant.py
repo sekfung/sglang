@@ -2094,6 +2094,25 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
 
         # Weight processing based on strategy
         if (
+            not self.enable_flashinfer_trtllm_moe
+            and not self.enable_flashinfer_cutlass_moe
+            and not self.enable_flashinfer_cutedsl_moe
+            and is_sm120_supported()
+            and envs.SGLANG_OPT_USE_SM120_CUTEDSL_MOE.get()
+        ):
+            # SM120 CuTe-DSL NVFP4 fused MoE (opt-in, fastest path on RTX PRO 6000).
+            # Fold per-tensor global scales into block scales (alpha=1.0), convert
+            # to 6D MMA layout, set fc2_input_scale=ones (dynamic per-block FC2
+            # input requant).  Skips TRTLLM/CUTLASS/CUTEDSL weight processing.
+            from sglang.srt.layers.moe.fused_moe_triton.nvfp4_moe_sm120_cutedsl import (
+                prepare_sm120_cutedsl_nvfp4_weights,
+            )
+
+            prepare_sm120_cutedsl_nvfp4_weights(
+                layer, activation=self.moe_runner_config.activation
+            )
+            # We are done; skip the blocks below.
+        elif (
             self.enable_flashinfer_trtllm_moe
             and reorder_rows_for_gated_act_gemm is not None
             and shuffle_matrix_sf_a is not None
@@ -2250,10 +2269,17 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
 
     @property
     def load_up_proj_weight_first(self) -> bool:
-        # Load W13 as [Up, Gate] for FlashInfer CUTLASS and CuteDSL v2 kernels.
-        # The CuteDSL v1 (deepep) path uses [Gate, Up] -- do NOT flip.
+        # Load W13 as [Up, Gate] for FlashInfer CUTLASS, CuteDSL v2, and
+        # SM120 CuTe-DSL b12x kernels.  The CuteDSL v1 (deepep) path uses
+        # [Gate, Up] -- do NOT flip.
+        _b12x = (
+            is_sm120_supported()
+            and envs.SGLANG_OPT_USE_SM120_CUTEDSL_MOE.get()
+        )
         return self.moe_runner_config.is_gated and (
-            self.enable_flashinfer_cutlass_moe or self._is_cutedsl_v2_standard
+            self.enable_flashinfer_cutlass_moe
+            or self._is_cutedsl_v2_standard
+            or _b12x
         )
 
     def create_moe_runner(
@@ -2298,6 +2324,30 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
             activation in _SUPPORTED_ACT_STRS
         ), f"{activation=} not in supported {_SUPPORTED_ACT_STRS}"
         moe_runner_config = self.moe_runner_config
+
+        # SM120 CuTe-DSL NVFP4 fused MoE (opt-in, fastest MoE path on RTX PRO 6000).
+        if getattr(layer, "_nvfp4_backend", None) == "sm120_cutedsl":
+            from sglang.srt.layers.moe.fused_moe_triton.nvfp4_moe_sm120_cutedsl import (
+                nvfp4_moe_forward_sm120_cutedsl,
+            )
+
+            hidden_states = dispatch_output.hidden_states
+            num_experts = layer.num_experts  # global experts
+            if hasattr(dispatch_output, "topk_output"):
+                topk_output = dispatch_output.topk_output
+            else:
+                topk_output = dispatch_output  # DeepEP dispatch: fields direct on tuple
+            top_k = topk_output.topk_ids.shape[-1]
+            output = nvfp4_moe_forward_sm120_cutedsl(
+                layer,
+                hidden_states=hidden_states,
+                topk_ids=topk_output.topk_ids,
+                topk_weights=topk_output.topk_weights,
+                num_experts=num_experts,
+                top_k=top_k,
+                activation=activation,
+            )
+            return StandardCombineInput(hidden_states=output)
 
         if moe_runner_backend.is_marlin():
             from sglang.srt.layers.moe.moe_runner.marlin import MarlinMoeQuantInfo

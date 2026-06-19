@@ -786,6 +786,11 @@ class Envs:
     SGLANG_OPT_USE_TILELANG_INDEXER = EnvBool(False)
     SGLANG_OPT_USE_AITER_INDEXER = EnvBool(False)
     SGLANG_OPT_USE_JIT_INDEXER_METADATA = EnvBool(True)
+    # SM120 (RTX PRO 6000): route DeepSeek V4 MXFP4 MoE to the flashinfer
+    # native CuTe-DSL fused kernel (flashinfer.fused_moe.cute_dsl.blackwell_sm12x,
+    # sekfung/flashinfer feat/sm120) instead of the sm120_triton fallback.
+    # Requires a flashinfer build with the sm120 W4A16 MoE kernels. Off by default.
+    SGLANG_OPT_USE_SM120_CUTEDSL_MOE = EnvBool(False)
     SGLANG_OPT_USE_ONLINE_COMPRESS = EnvBool(False)
     SGLANG_EXPERIMENTAL_ONLINE_C128_MTP = EnvBool(False)
     SGLANG_DSV4_COMPRESS_STATE_DTYPE = EnvStr("float32")

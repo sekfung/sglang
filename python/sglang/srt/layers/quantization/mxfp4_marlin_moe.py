@@ -143,6 +143,24 @@ class Mxfp4MarlinMoEMethod:
                 )
             # else: float32 scales are already usable directly
             layer._dsv4_mxfp4_backend = "sm120_triton"
+
+            # Opt-in: flashinfer native CuTe-DSL fused MoE (faster than triton).
+            from sglang.srt.environ import envs
+
+            if envs.SGLANG_OPT_USE_SM120_CUTEDSL_MOE.get():
+                try:
+                    from sglang.srt.layers.moe.fused_moe_triton.mxfp4_moe_sm120_cutedsl import (
+                        prepare_sm120_cutedsl_weights,
+                    )
+
+                    prepare_sm120_cutedsl_weights(layer)
+                    layer._dsv4_mxfp4_backend = "sm120_cutedsl"
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "SM120 CuTe-DSL MoE prepare failed (%s); "
+                        "falling back to sm120_triton.",
+                        e,
+                    )
             return
 
         if not check_moe_marlin_supports_layer(layer, 32):
@@ -176,6 +194,25 @@ class Mxfp4MarlinMoEMethod:
         topk_output = dispatch_output.topk_output
         if not TopKOutputChecker.format_is_standard(topk_output):
             raise ValueError(f"Unsupported topk output format: {topk_output.format}")
+
+        # SM120: flashinfer native CuTe-DSL fused MoE (opt-in, fastest path)
+        if layer._dsv4_mxfp4_backend == "sm120_cutedsl":
+            from sglang.srt.layers.moe.fused_moe_triton.mxfp4_moe_sm120_cutedsl import (
+                mxfp4_moe_forward_sm120_cutedsl,
+            )
+
+            hidden_states = dispatch_output.hidden_states
+            num_experts = layer.w13_weight.shape[0]
+            top_k = topk_output.topk_ids.shape[-1]
+            output = mxfp4_moe_forward_sm120_cutedsl(
+                layer,
+                hidden_states=hidden_states,
+                topk_ids=topk_output.topk_ids,
+                topk_weights=topk_output.topk_weights,
+                num_experts=num_experts,
+                top_k=top_k,
+            )
+            return StandardCombineInput(hidden_states=output)
 
         # SM120: use Triton fused dequant+GEMM (Marlin kernel produces NaN on SM120)
         if layer._dsv4_mxfp4_backend == "sm120_triton":
