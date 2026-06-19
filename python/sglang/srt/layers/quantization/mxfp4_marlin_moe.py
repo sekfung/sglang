@@ -26,9 +26,15 @@ class Mxfp4MarlinMoEMethod:
         self.prefix = prefix
 
     def create_moe_runner(self, layer, moe_runner_config):
+        from sglang.srt.environ import envs
         from sglang.srt.layers.moe.moe_runner import MoeRunner
 
         runner_backend = MoeRunnerBackend.MARLIN
+        if is_sm120_supported() and envs.SGLANG_OPT_USE_SM120_CUTEDSL_MOE.get():
+            # Route DSv4 NVFP4 experts through the flashinfer b12x fused MoE.
+            import sglang.srt.layers.moe.moe_runner.flashinfer_cutedsl  # noqa: F401
+
+            runner_backend = MoeRunnerBackend.FLASHINFER_CUTEDSL
         self.runner = MoeRunner(runner_backend, moe_runner_config)
 
     def create_weights(
@@ -197,19 +203,26 @@ class Mxfp4MarlinMoEMethod:
             )
             layer._dsv4_mxfp4_backend = "sm120_triton"
 
-            # FlashInfer's SM120 b12x W4A4 path currently does not match the
-            # NVIDIA DeepSeek-V4-Flash-NVFP4 checkpoint scale semantics used by
-            # this wrapper. Keep the correct Triton path even when the old opt-in
-            # env is set; otherwise decode can produce corrupted text.
+            # Opt-in: flashinfer native b12x CuTe-DSL fused MoE (faster than the
+            # Triton fallback). The adapter folds weight_scale_2 into the E4M3
+            # block scales (alpha -> 1, so the kernel's input_gs stays 1) and
+            # swaps the w13 halves to [up, gate] to match the b12x SwiGLU layout.
             from sglang.srt.environ import envs
 
             if envs.SGLANG_OPT_USE_SM120_CUTEDSL_MOE.get():
-                logger.warning_once(
-                    "SGLANG_OPT_USE_SM120_CUTEDSL_MOE is ignored for "
-                    "DeepSeek-V4 NVFP4 experts on SM120 because the b12x W4A4 "
-                    "scale mapping is not numerically compatible yet; using "
-                    "sm120_triton for correctness."
-                )
+                try:
+                    from sglang.srt.layers.moe.fused_moe_triton.mxfp4_moe_sm120_cutedsl import (
+                        prepare_sm120_cutedsl_weights,
+                    )
+
+                    prepare_sm120_cutedsl_weights(layer)
+                    layer._dsv4_mxfp4_backend = "sm120_cutedsl"
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "SM120 CuTe-DSL MoE prepare failed (%s); "
+                        "falling back to sm120_triton.",
+                        e,
+                    )
             return
 
         if not check_moe_marlin_supports_layer(layer, 32):
@@ -264,7 +277,16 @@ class Mxfp4MarlinMoEMethod:
                 top_k=topk_output.topk_ids.shape[-1],
                 quant_mode=getattr(p, "quant_mode", "nvfp4"),
             )
-            return self.runner.run(dispatch_output, quant_info)
+            combine = self.runner.run(dispatch_output, quant_info)
+            # routed_scaling_factor is NOT fused into topk weights for this
+            # method (should_fuse_routed_scaling_factor_in_topk is False), and
+            # the b12x kernel does not apply it, so scale the output here to
+            # match the Triton fallback. The shared CuteDSL fused func must not
+            # do this -- the ModelOpt NVFP4 path fuses it into topk instead.
+            rs = getattr(getattr(self.runner, "config", None), "routed_scaling_factor", None)
+            if rs is not None and rs != 1.0:
+                combine.hidden_states.mul_(rs)
+            return combine
 
         # SM120: use Triton fused dequant+GEMM (Marlin kernel produces NaN on SM120)
         if layer._dsv4_mxfp4_backend == "sm120_triton":

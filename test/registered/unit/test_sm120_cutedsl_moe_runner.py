@@ -39,6 +39,7 @@ class TestSm120CuteDslMoeRunner(unittest.TestCase):
     def test_mxfp4_sm120_b12x_apply_passes_loaded_global_scales(self):
         method = Mxfp4MarlinMoEMethod(MagicMock(), prefix="model.layers.0.mlp.experts")
         method.runner = MagicMock()
+        method.runner.config.routed_scaling_factor = None
         method.runner.run.return_value = StandardCombineInput(
             hidden_states=torch.empty(2, 8, dtype=torch.bfloat16)
         )
@@ -76,7 +77,7 @@ class TestSm120CuteDslMoeRunner(unittest.TestCase):
         self.assertIs(args[1].w2_alpha, w2_global_scale)
         self.assertIs(args[1].fc2_input_scale, fc2_input_scale)
 
-    def test_mxfp4_sm120_env_keeps_marlin_runner_for_dsv4_nvfp4(self):
+    def test_mxfp4_sm120_b12x_create_runner_uses_flashinfer_cutedsl(self):
         method = Mxfp4MarlinMoEMethod(MagicMock(), prefix="model.layers.0.mlp.experts")
         config = MoeRunnerConfig(activation="silu", is_gated=True, top_k=2)
 
@@ -93,11 +94,12 @@ class TestSm120CuteDslMoeRunner(unittest.TestCase):
         ):
             method.create_moe_runner(SimpleNamespace(), config)
 
-        moe_runner.assert_called_once_with(MoeRunnerBackend.MARLIN, config)
+        moe_runner.assert_called_once_with(MoeRunnerBackend.FLASHINFER_CUTEDSL, config)
 
     def test_mxfp4_sm120_b12x_apply_uses_moe_runner(self):
         method = Mxfp4MarlinMoEMethod(MagicMock(), prefix="model.layers.0.mlp.experts")
         method.runner = MagicMock()
+        method.runner.config.routed_scaling_factor = None
         method.runner.run.return_value = StandardCombineInput(
             hidden_states=torch.empty(2, 8, dtype=torch.bfloat16)
         )
@@ -170,6 +172,7 @@ class TestSm120CuteDslMoeRunner(unittest.TestCase):
             params_dtype=torch.bfloat16,
         )
         method.runner = MagicMock()
+        method.runner.config.routed_scaling_factor = None
         method.runner.run.return_value = StandardCombineInput(
             hidden_states=torch.empty(2, 8, dtype=torch.bfloat16)
         )

@@ -99,19 +99,34 @@ def _swizzle_blockscale_sf32(scale_f32):
 
 
 def prepare_sm120_cutedsl_weights(layer, *, activation: str = "silu"):
-    """Convert NVFP4 checkpoint weights directly to b12x MMA layout.
+    """Convert NVFP4 checkpoint weights to the b12x MMA layout.
 
-    No dequant→requant: the block scales are reformatted in-place
-    (E4M3 → swizzle → MMA 6D) and FP32 ``weight_scale_2`` remains an alpha.
+    Two transforms are applied so the b12x SM120 kernel matches SGLang's
+    SwiGLU semantics and the checkpoint's NVFP4 scale convention:
+
+    1. **Swap the w13 halves.** SGLang loads w13 as ``[gate, up]`` and computes
+       ``silu(gate) * up`` (first half gated). The b12x kernel instead computes
+       ``silu(second_half) * first_half`` (see flashinfer's
+       ``compute_reference_moe_fp4``), so the halves are reordered to
+       ``[up, gate]`` together with their block scales.
+
+    2. **Fold ``weight_scale_2`` into the per-block E4M3 scales** (alpha → 1).
+       The kernel reuses ``w1_alpha`` as ``input_gs`` — the per-tensor global
+       scale used to quantise the *activations* — so passing the weight global
+       scale (``weight_scale_2`` ≈ ``2**-13``) as alpha corrupts activation
+       quantisation and blows the output up by ~5 orders of magnitude. Folding
+       keeps alpha = 1 (correct ``input_gs``) and is lossless here because the
+       checkpoint block scales are powers of two in ``[32, 256]``, so
+       ``block_scale * 2**-13`` stays exactly representable in E4M3.
     """
     from flashinfer.cute_dsl.utils import convert_sf_to_mma_layout
 
-    w13 = layer.w13_weight.data              # [E, 2*n, k/2]   uint8
+    w13 = layer.w13_weight.data              # [E, 2*n, k/2]   uint8  [gate, up]
     w2  = layer.w2_weight.data               # [E, k,   n/2]   uint8
     w13_s = layer.w13_weight_scale.data      # [E, 2*n, k/16]  float8_e4m3fn
     w2_s  = layer.w2_weight_scale.data       # [E, k,   n/16]  float8_e4m3fn
-    w13_global_scale = layer.w13_weight_scale_2.data
-    w2_global_scale = layer.w2_weight_scale_2.data
+    w13_global_scale = layer.w13_weight_scale_2.data  # [E, 2] or [E]  float32
+    w2_global_scale = layer.w2_weight_scale_2.data    # [E]           float32
 
     num_experts = w13.shape[0]
     device = w13.device
@@ -119,43 +134,63 @@ def prepare_sm120_cutedsl_weights(layer, *, activation: str = "silu"):
     hidden_size = w13.shape[2] * 2     # unpacked K
     w2_rows = w2.shape[1]              # hidden_size
     intermediate_size = w2.shape[2] * 2  # unpacked N
+    n_half = w13_rows // 2            # intermediate_per_partition
 
-    # Swizzle the block scales (sf32 → interleaved 2D flat).
-    w13_sf_2d = _swizzle_blockscale_sf32(w13_s.reshape(num_experts * w13_rows, hidden_size // _SF_VEC_SIZE))
-    w2_sf_2d  = _swizzle_blockscale_sf32(w2_s.reshape(num_experts * w2_rows, intermediate_size // _SF_VEC_SIZE))
+    # 1. Swap w13 halves [gate, up] -> [up, gate] (weights + block scales).
+    w13 = torch.cat([w13[:, n_half:], w13[:, :n_half]], dim=1).contiguous()
+    w13_s = torch.cat([w13_s[:, n_half:], w13_s[:, :n_half]], dim=1)
 
-    # Convert to 6D MMA layout.
+    # 2. Fold weight_scale_2 into block scales (per-half for w13). After the
+    #    swap, the first half is "up" and the second half is "gate", so the
+    #    per-half global scales are reordered to match.
+    gs = w13_global_scale.to(torch.float32)
+    if gs.ndim == 2 and gs.shape[1] >= 2:
+        gs_swapped = gs[:, [1, 0]]                    # [up_gs, gate_gs]
+    else:
+        gs_swapped = gs.reshape(num_experts, 1).expand(num_experts, 2)
+    gs_rows = gs_swapped.repeat_interleave(n_half, dim=1)  # [E, 2*n]
+    w13_sf_folded = (w13_s.float() * gs_rows[..., None]).to(torch.float8_e4m3fn)
+    w2_sf_folded = (
+        w2_s.float() * w2_global_scale.to(torch.float32).view(num_experts, 1, 1)
+    ).to(torch.float8_e4m3fn)
+
+    # 3. Swizzle (per-expert, 3D) then convert to the 6D MMA layout.
     w13_sf_mma = convert_sf_to_mma_layout(
-        w13_sf_2d.contiguous().view(torch.uint8).reshape(-1),
+        _swizzle_blockscale_sf32(w13_sf_folded).contiguous().view(torch.uint8).reshape(-1),
         m=w13_rows, k=hidden_size, num_groups=num_experts, sf_vec_size=_SF_VEC_SIZE,
     )
     w2_sf_mma = convert_sf_to_mma_layout(
-        w2_sf_2d.contiguous().view(torch.uint8).reshape(-1),
+        _swizzle_blockscale_sf32(w2_sf_folded).contiguous().view(torch.uint8).reshape(-1),
         m=w2_rows, k=intermediate_size, num_groups=num_experts, sf_vec_size=_SF_VEC_SIZE,
     )
 
-    if w13_global_scale.ndim == 2 and w13_global_scale.shape[1] >= 2:
-        if not torch.allclose(w13_global_scale[:, 0], w13_global_scale[:, 1]):
-            logger.warning(
-                "SM120 b12x NVFP4 path got different w1/w3 global scales; "
-                "using w1 scale for fused w13 alpha."
-            )
-        w13_global_scale = w13_global_scale[:, 0]
-    w13_global_scale = w13_global_scale.contiguous().to(torch.float32)
-    w2_global_scale = w2_global_scale.contiguous().to(torch.float32)
+    # 4. Global scales are folded in; alpha = 1. fc2_input_scale = 1 (the kernel
+    #    does dynamic per-block FC2-input requant).
+    ones_e = torch.ones(num_experts, dtype=torch.float32, device=device)
 
     layer._sm120_cutedsl_packed = type("_Packed", (), {
         "w13": w13,
         "w13_scale": w13_sf_mma,
-        "w13_global_scale": w13_global_scale,
+        "w13_global_scale": ones_e,
         "w2": w2,
         "w2_scale": w2_sf_mma,
-        "w2_global_scale": w2_global_scale,
+        "w2_global_scale": ones_e,
         "fc2_input_scale": torch.ones(1, dtype=torch.float32, device=device),
         "quant_mode": "nvfp4",
         "workspace": None,
     })()
     layer._dsv4_mxfp4_backend = "sm120_cutedsl"
+
+    # Release tensors the b12x path no longer needs so we don't keep a second
+    # full-size copy of w13 (the swap) plus the original block scales alive for
+    # every layer. The cutedsl forward reads only ``_sm120_cutedsl_packed``.
+    empty = torch.empty(0, dtype=torch.uint8, device=device)
+    layer.w13_weight.data = w13                  # swapped weight replaces [gate,up]
+    layer.w13_weight_scale.data = empty          # consumed into the MMA scale
+    layer.w2_weight_scale.data = empty
+    for attr in ("_sm120_triton_w13_scale", "_sm120_triton_w2_scale"):
+        if getattr(layer, attr, None) is not None:
+            setattr(layer, attr, None)
 
 
 def mxfp4_moe_forward_sm120_cutedsl(
