@@ -60,7 +60,7 @@ def _mxfp4_slot_gemv_kernel(
     # Pointers
     A_ptr,  # [M_total, K] bf16 — source rows
     B_packed_ptr,  # [E, N, K//2] uint8 — packed FP4 expert weights
-    B_scale_ptr,  # [E, N, K//32] float32 — weight scales
+    B_scale_ptr,  # [E, N, K//16] float32 — weight scales
     C_ptr,  # [num_slots, N] bf16 — output
     token_ids_ptr,  # [num_slots] int32 — which A row for each slot
     expert_ids_ptr,  # [num_slots] int32 — which expert's B for each slot
@@ -74,7 +74,7 @@ def _mxfp4_slot_gemv_kernel(
     stride_bk2: tl.int32,
     # B_scale strides (within an expert)
     stride_bsn: tl.int32,
-    stride_bsk32: tl.int32,
+    stride_bsk16: tl.int32,
     # Expert strides (between experts)
     expert_b_stride: tl.int64,
     expert_s_stride: tl.int64,
@@ -124,13 +124,13 @@ def _mxfp4_slot_gemv_kernel(
         val_hi = _dequant_fp4_lut((b_u8 >> 4) & 0x0F)  # odd K indices
 
         # ── Load and apply scales: [BLOCK_N, BLOCK_K//2] ──
-        group_ids = tl.arange(0, BLOCK_K // 2) // 16  # 32 values per group, 2 per byte
-        s_mask = n_mask[:, None] & ((k_start // 32 + group_ids[None, :]) < K // 32)
+        group_ids = tl.arange(0, BLOCK_K // 2) // 8  # 16 values per group, 2 per byte
+        s_mask = n_mask[:, None] & ((k_start // 16 + group_ids[None, :]) < K // 16)
         scales = tl.load(
             B_scale_ptr
             + s_base
             + offs_n[:, None] * stride_bsn
-            + (k_start // 32 + group_ids[None, :]) * stride_bsk32,
+            + (k_start // 16 + group_ids[None, :]) * stride_bsk16,
             mask=s_mask,
             other=1.0,
         )
@@ -192,7 +192,7 @@ def _mxfp4_gemm_kernel(
     # Pointers
     A_ptr,  # [M, K] bf16 activation
     B_packed_ptr,  # [N, K//2] uint8 packed FP4
-    B_scale_ptr,  # [N, K//32] float32 scales
+    B_scale_ptr,  # [N, K//16] float32 scales
     C_ptr,  # [M, N] bf16 output
     # Dimensions
     M,
@@ -204,7 +204,7 @@ def _mxfp4_gemm_kernel(
     stride_bn,
     stride_bk2,
     stride_bsn,
-    stride_bsk32,
+    stride_bsk16,
     stride_cm,
     stride_cn,
     # Constexprs
@@ -234,13 +234,13 @@ def _mxfp4_gemm_kernel(
         val_lo = _dequant_fp4_lut(b_u8 & 0x0F)
         val_hi = _dequant_fp4_lut((b_u8 >> 4) & 0x0F)
 
-        group_ids = tl.arange(0, BLOCK_K // 2) // 16
+        group_ids = tl.arange(0, BLOCK_K // 2) // 8
         scales_per_byte = tl.load(
             B_scale_ptr
             + offs_n[:, None] * stride_bsn
-            + (k_start // 32 + group_ids[None, :]) * stride_bsk32,
+            + (k_start // 16 + group_ids[None, :]) * stride_bsk16,
             mask=(offs_n[:, None] < N)
-            & ((k_start // 32 + group_ids[None, :]) < K // 32),
+            & ((k_start // 16 + group_ids[None, :]) < K // 16),
             other=1.0,
         )
         val_lo = val_lo * scales_per_byte

@@ -382,6 +382,7 @@ class Sm120CuteDslMxfp4MoeQuantInfo(MoeQuantInfo):
     num_experts: int
     num_local_experts: int
     top_k: int
+    quant_mode: str = "nvfp4"
 
 
 @register_fused_func("none", "flashinfer_cutedsl")
@@ -438,7 +439,7 @@ def fused_experts_none_to_flashinfer_cutedsl_fp4(
             num_local_experts=quant_info.num_local_experts,
             activation=runner_config.activation,
             quant_mode=(
-                "nvfp4_sf32"
+                quant_info.quant_mode
                 if isinstance(quant_info, Sm120CuteDslMxfp4MoeQuantInfo)
                 else "nvfp4"
             ),

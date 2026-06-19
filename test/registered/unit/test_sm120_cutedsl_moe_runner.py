@@ -16,7 +16,67 @@ from sglang.srt.layers.quantization.modelopt_quant import ModelOptNvFp4FusedMoEM
 
 
 class TestSm120CuteDslMoeRunner(unittest.TestCase):
-    def test_mxfp4_sm120_b12x_create_runner_uses_flashinfer_cutedsl(self):
+    def test_mxfp4_create_weights_registers_nvfp4_scales(self):
+        method = Mxfp4MarlinMoEMethod(MagicMock(), prefix="model.layers.0.mlp.experts")
+        layer = torch.nn.Module()
+        layer.moe_runner_config = MoeRunnerConfig(activation="silu", is_gated=True, top_k=2)
+
+        method.create_weights(
+            layer,
+            num_experts=4,
+            hidden_size=64,
+            intermediate_size_per_partition=32,
+            params_dtype=torch.bfloat16,
+        )
+
+        self.assertEqual(tuple(layer.w13_weight_scale.shape), (4, 64, 4))
+        self.assertEqual(tuple(layer.w2_weight_scale.shape), (4, 64, 2))
+        self.assertEqual(tuple(layer.w13_weight_scale_2.shape), (4, 2))
+        self.assertEqual(tuple(layer.w2_weight_scale_2.shape), (4,))
+        self.assertEqual(tuple(layer.w13_input_scale.shape), (4, 2))
+        self.assertEqual(tuple(layer.w2_input_scale.shape), (4,))
+
+    def test_mxfp4_sm120_b12x_apply_passes_loaded_global_scales(self):
+        method = Mxfp4MarlinMoEMethod(MagicMock(), prefix="model.layers.0.mlp.experts")
+        method.runner = MagicMock()
+        method.runner.run.return_value = StandardCombineInput(
+            hidden_states=torch.empty(2, 8, dtype=torch.bfloat16)
+        )
+
+        w13_global_scale = torch.tensor([0.25, 0.5, 1.0, 2.0])
+        w2_global_scale = torch.tensor([0.125, 0.25, 0.5, 1.0])
+        fc2_input_scale = torch.tensor([3.0])
+        layer = SimpleNamespace(
+            _dsv4_mxfp4_backend="sm120_cutedsl",
+            _sm120_cutedsl_packed=SimpleNamespace(
+                w13=torch.empty(4, 16, 4, dtype=torch.uint8),
+                w13_scale=torch.empty(1, dtype=torch.uint8),
+                w13_global_scale=w13_global_scale,
+                w2=torch.empty(4, 8, 8, dtype=torch.uint8),
+                w2_scale=torch.empty(1, dtype=torch.uint8),
+                w2_global_scale=w2_global_scale,
+                fc2_input_scale=fc2_input_scale,
+            ),
+        )
+        topk_output = StandardTopKOutput(
+            topk_weights=torch.ones(2, 2, dtype=torch.float32),
+            topk_ids=torch.zeros(2, 2, dtype=torch.int64),
+            router_logits=None,
+        )
+        dispatch_output = StandardDispatchOutput(
+            hidden_states=torch.empty(2, 8, dtype=torch.bfloat16),
+            hidden_states_scale=None,
+            topk_output=topk_output,
+        )
+
+        method.apply(layer, dispatch_output)
+
+        args, _ = method.runner.run.call_args
+        self.assertIs(args[1].w1_alpha, w13_global_scale)
+        self.assertIs(args[1].w2_alpha, w2_global_scale)
+        self.assertIs(args[1].fc2_input_scale, fc2_input_scale)
+
+    def test_mxfp4_sm120_env_keeps_marlin_runner_for_dsv4_nvfp4(self):
         method = Mxfp4MarlinMoEMethod(MagicMock(), prefix="model.layers.0.mlp.experts")
         config = MoeRunnerConfig(activation="silu", is_gated=True, top_k=2)
 
@@ -33,7 +93,7 @@ class TestSm120CuteDslMoeRunner(unittest.TestCase):
         ):
             method.create_moe_runner(SimpleNamespace(), config)
 
-        moe_runner.assert_called_once_with(MoeRunnerBackend.FLASHINFER_CUTEDSL, config)
+        moe_runner.assert_called_once_with(MoeRunnerBackend.MARLIN, config)
 
     def test_mxfp4_sm120_b12x_apply_uses_moe_runner(self):
         method = Mxfp4MarlinMoEMethod(MagicMock(), prefix="model.layers.0.mlp.experts")

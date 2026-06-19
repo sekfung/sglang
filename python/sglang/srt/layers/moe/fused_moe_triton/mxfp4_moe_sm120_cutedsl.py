@@ -1,23 +1,20 @@
-"""SM120 native NVFP4 (sf32/E4M3) fused MoE via flashinfer b12x CuTe-DSL.
+"""SM120 native NVFP4 (E4M3 block-scale) fused MoE via flashinfer b12x CuTe-DSL.
 
 Wraps ``flashinfer.b12x_fused_moe`` (sekfung/flashinfer feat/sm120) for the
 Nvidia DeepSeek-V4-Flash-NVFP4 checkpoint on RTX PRO 6000 / SM120.  Off by
 default; gated by ``SGLANG_OPT_USE_SM120_CUTEDSL_MOE``.
 
-The checkpoint stores MoE expert weights as packed FP4 (E2M1) with 32-element
-E4M3 block scales.  At load time the adapter dequantises to bf16, re-quantises
-with the same block size via ``fp4_quantize(sf_vec_size=32)`` to produce the
-swizzled layout, converts to 6D MMA layout, and stores the result for the
-forward pass.  This dequant→requant is a one-time cost (~10 s per layer) and
-does not introduce additional quantisation noise because the block size stays
-the same.
+The Nvidia checkpoint stores MoE expert weights as packed FP4 (E2M1) with
+16-element E4M3 block scales plus per-expert FP32 ``weight_scale_2``.  At load
+time this adapter only swizzles the checkpoint block scales into the MMA layout;
+it does not dequantise or requantise the FP4 weights.
 """
 import logging
 import torch
 
 logger = logging.getLogger(__name__)
 
-_SF_VEC_SIZE = 32  # checkpoint MoE block scale size
+_SF_VEC_SIZE = 16  # checkpoint MoE block scale size
 _GROUP_SIZE = 16   # E4M3 scale group size (unchanged from nvfp4)
 
 
@@ -73,42 +70,48 @@ def _dequant_and_requant_block(w_uint8, scale_f32, sf_vec_size):
 
 
 def _swizzle_blockscale_sf32(scale_f32):
-    """Swizzle float32 block scales (sf_vec_size=32) to the interleaved 2D
+    """Swizzle E4M3 block scales to the interleaved 2D
     layout that ``convert_sf_to_mma_layout`` consumes.
 
-    Mirrors ``swizzle_blockscale`` (which hardcodes sf16), but operates on
-    the K/32 dimension directly.
+    Mirrors ``swizzle_blockscale`` but accepts either raw float8_e4m3fn scales
+    from the checkpoint or float32 tensors used by tests.
     """
     import math
-    if scale_f32.ndim == 2:
+    scale_ndim = scale_f32.ndim
+    if scale_ndim == 2:
         scale_f32 = scale_f32.unsqueeze(0)
-    B, M, K32 = scale_f32.shape  # K32 = cols // 32
+    B, M, K32 = scale_f32.shape  # K32 = cols // _SF_VEC_SIZE
     M_pad = ((M + 127) // 128) * 128
     K_pad = ((K32 + 3) // 4) * 4
     padded = torch.zeros((B, M_pad, K_pad), dtype=scale_f32.dtype, device=scale_f32.device)
     padded[:B, :M, :K32] = scale_f32
-    # Convert to float8_e4m3fn (the byte format the MMA converter expects).
-    f8 = padded.clamp(-448, 448).to(torch.float8_e4m3fn)
+    if padded.dtype == torch.float8_e4m3fn:
+        f8 = padded
+    else:
+        # Convert to float8_e4m3fn (the byte format the MMA converter expects).
+        f8 = padded.clamp(-448, 448).to(torch.float8_e4m3fn)
     f8 = f8.reshape(B, M_pad // 128, 4, 32, K_pad // 4, 4)
     swz = f8.permute(0, 1, 4, 3, 2, 5).contiguous()
     out = swz.reshape(B, M_pad, K_pad)
-    if scale_f32.ndim == 2:
+    if scale_ndim == 2:
         out = out.squeeze(0)
     return out
 
 
 def prepare_sm120_cutedsl_weights(layer, *, activation: str = "silu"):
-    """Convert NVFP4-sf32 checkpoint weights directly to b12x MMA layout.
+    """Convert NVFP4 checkpoint weights directly to b12x MMA layout.
 
     No dequant→requant: the block scales are reformatted in-place
-    (float32 E4M3 → float8_e4m3fn → swizzle → MMA 6D).
+    (E4M3 → swizzle → MMA 6D) and FP32 ``weight_scale_2`` remains an alpha.
     """
     from flashinfer.cute_dsl.utils import convert_sf_to_mma_layout
 
     w13 = layer.w13_weight.data              # [E, 2*n, k/2]   uint8
     w2  = layer.w2_weight.data               # [E, k,   n/2]   uint8
-    w13_s = layer.w13_weight_scale_inv.data  # [E, 2*n, k/32]  float32
-    w2_s  = layer.w2_weight_scale_inv.data   # [E, k,   n/32]  float32
+    w13_s = layer.w13_weight_scale.data      # [E, 2*n, k/16]  float8_e4m3fn
+    w2_s  = layer.w2_weight_scale.data       # [E, k,   n/16]  float8_e4m3fn
+    w13_global_scale = layer.w13_weight_scale_2.data
+    w2_global_scale = layer.w2_weight_scale_2.data
 
     num_experts = w13.shape[0]
     device = w13.device
@@ -131,16 +134,25 @@ def prepare_sm120_cutedsl_weights(layer, *, activation: str = "silu"):
         m=w2_rows, k=intermediate_size, num_groups=num_experts, sf_vec_size=_SF_VEC_SIZE,
     )
 
-    ones = torch.ones(num_experts, dtype=torch.float32, device=device)
+    if w13_global_scale.ndim == 2 and w13_global_scale.shape[1] >= 2:
+        if not torch.allclose(w13_global_scale[:, 0], w13_global_scale[:, 1]):
+            logger.warning(
+                "SM120 b12x NVFP4 path got different w1/w3 global scales; "
+                "using w1 scale for fused w13 alpha."
+            )
+        w13_global_scale = w13_global_scale[:, 0]
+    w13_global_scale = w13_global_scale.contiguous().to(torch.float32)
+    w2_global_scale = w2_global_scale.contiguous().to(torch.float32)
 
     layer._sm120_cutedsl_packed = type("_Packed", (), {
         "w13": w13,
         "w13_scale": w13_sf_mma,
-        "w13_global_scale": ones,
+        "w13_global_scale": w13_global_scale,
         "w2": w2,
         "w2_scale": w2_sf_mma,
-        "w2_global_scale": ones,
+        "w2_global_scale": w2_global_scale,
         "fc2_input_scale": torch.ones(1, dtype=torch.float32, device=device),
+        "quant_mode": "nvfp4",
         "workspace": None,
     })()
     layer._dsv4_mxfp4_backend = "sm120_cutedsl"

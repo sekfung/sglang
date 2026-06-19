@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class Mxfp4MarlinMoEMethod:
-    """MXFP4 (E8M0 scales) MoE quantization method using the Marlin backend."""
+    """MXFP4/NVFP4 MoE quantization method using the Marlin-compatible path."""
 
     def __init__(self, fp8_method, prefix: str):
         self._fp8 = fp8_method
@@ -29,10 +29,6 @@ class Mxfp4MarlinMoEMethod:
         from sglang.srt.layers.moe.moe_runner import MoeRunner
 
         runner_backend = MoeRunnerBackend.MARLIN
-        if is_sm120_supported() and envs.SGLANG_OPT_USE_SM120_CUTEDSL_MOE.get():
-            import sglang.srt.layers.moe.moe_runner.flashinfer_cutedsl  # noqa: F401
-
-            runner_backend = MoeRunnerBackend.FLASHINFER_CUTEDSL
         self.runner = MoeRunner(runner_backend, moe_runner_config)
 
     def create_weights(
@@ -49,7 +45,9 @@ class Mxfp4MarlinMoEMethod:
         )
 
         layer._dsv4_mxfp4_backend = None  # set in process_weights_after_loading
-        fp4_block_k = 32
+        # Nvidia's DeepSeek-V4-Flash-NVFP4 checkpoint stores expert FP4 weights
+        # with one E4M3 block scale per 16 unpacked K values.
+        fp4_block_k = 16
 
         w13_weight = torch.nn.Parameter(
             torch.empty(
@@ -75,20 +73,20 @@ class Mxfp4MarlinMoEMethod:
         set_weight_attrs(w2_weight, extra_weight_attrs)
 
         w13_weight_scale = torch.nn.Parameter(
-            torch.ones(
+            torch.empty(
                 num_experts,
                 2 * intermediate_size_per_partition,
                 hidden_size // fp4_block_k,
-                dtype=torch.float32,
+                dtype=torch.float8_e4m3fn,
             ),
             requires_grad=False,
         )
         w2_weight_scale = torch.nn.Parameter(
-            torch.ones(
+            torch.empty(
                 num_experts,
                 hidden_size,
                 intermediate_size_per_partition // fp4_block_k,
-                dtype=torch.float32,
+                dtype=torch.float8_e4m3fn,
             ),
             requires_grad=False,
         )
@@ -96,10 +94,67 @@ class Mxfp4MarlinMoEMethod:
         w2_weight_scale.format_ue8m0 = False
         scale_attrs = dict(extra_weight_attrs)
         scale_attrs["quant_method"] = FusedMoeWeightScaleSupported.BLOCK.value
-        layer.register_parameter("w13_weight_scale_inv", w13_weight_scale)
+        layer.register_parameter("w13_weight_scale", w13_weight_scale)
         set_weight_attrs(w13_weight_scale, scale_attrs)
-        layer.register_parameter("w2_weight_scale_inv", w2_weight_scale)
+        layer.register_parameter("w2_weight_scale", w2_weight_scale)
         set_weight_attrs(w2_weight_scale, scale_attrs)
+
+        tensor_scale_attrs = dict(extra_weight_attrs)
+        tensor_scale_attrs["quant_method"] = FusedMoeWeightScaleSupported.TENSOR.value
+        num_shards = 2 if getattr(layer.moe_runner_config, "is_gated", True) else 1
+
+        w13_weight_scale_2 = torch.nn.Parameter(
+            torch.empty(num_experts, num_shards, dtype=torch.float32),
+            requires_grad=False,
+        )
+        layer.register_parameter("w13_weight_scale_2", w13_weight_scale_2)
+        set_weight_attrs(w13_weight_scale_2, tensor_scale_attrs)
+
+        w2_weight_scale_2 = torch.nn.Parameter(
+            torch.empty(num_experts, dtype=torch.float32),
+            requires_grad=False,
+        )
+        layer.register_parameter("w2_weight_scale_2", w2_weight_scale_2)
+        set_weight_attrs(w2_weight_scale_2, tensor_scale_attrs)
+
+        w13_input_scale = torch.nn.Parameter(
+            torch.empty(num_experts, num_shards, dtype=torch.float32),
+            requires_grad=False,
+        )
+        layer.register_parameter("w13_input_scale", w13_input_scale)
+        set_weight_attrs(w13_input_scale, tensor_scale_attrs)
+
+        w2_input_scale = torch.nn.Parameter(
+            torch.empty(num_experts, dtype=torch.float32),
+            requires_grad=False,
+        )
+        layer.register_parameter("w2_input_scale", w2_input_scale)
+        set_weight_attrs(w2_input_scale, tensor_scale_attrs)
+
+    @staticmethod
+    def _expand_w13_global_scale(
+        block_scale: torch.Tensor, global_scale: torch.Tensor
+    ) -> torch.Tensor:
+        gs = global_scale.to(device=block_scale.device, dtype=torch.float32)
+        if gs.ndim == 2 and gs.shape[1] == 2:
+            rows_per_half = block_scale.shape[1] // 2
+            gs = gs.repeat_interleave(rows_per_half, dim=1)
+        while gs.ndim < block_scale.ndim:
+            gs = gs.unsqueeze(-1)
+        return gs
+
+    @classmethod
+    def _fold_global_scale_for_triton(
+        cls, block_scale: torch.Tensor, global_scale: torch.Tensor, *, is_w13: bool
+    ) -> torch.Tensor:
+        block_scale_f32 = block_scale.to(torch.float32)
+        if is_w13:
+            gs = cls._expand_w13_global_scale(block_scale_f32, global_scale)
+        else:
+            gs = global_scale.to(
+                device=block_scale.device, dtype=torch.float32
+            ).view(-1, 1, 1)
+        return (block_scale_f32 * gs).contiguous()
 
     def process_weights_after_loading(self, layer: Module) -> None:
         from sglang.srt.layers.quantization.marlin_utils import (
@@ -123,50 +178,38 @@ class Mxfp4MarlinMoEMethod:
         # SM120: Skip Marlin repacking, keep original weight format
         # for Triton dequant kernel (Marlin kernel produces NaN on SM120)
         if is_sm120_supported():
-            from torch.nn import Parameter
-
             log_info_on_rank0(
                 logger,
                 f"SM120 detected: using PyTorch MXFP4 MoE fallback "
                 f"(layer: {self.prefix})...",
             )
             # Keep weights in original packed int8 format
-            # Normalize scales to float32 for direct use in dequant
-            w13_s = layer.w13_weight_scale_inv.data
-            w2_s = layer.w2_weight_scale_inv.data
-            if w13_s.dtype == torch.float8_e8m0fnu:
-                pass  # already in e8m0 format, will convert at runtime
-            elif w13_s.dtype in (torch.uint8, torch.int8):
-                layer.w13_weight_scale_inv = Parameter(
-                    w13_s.view(torch.uint8)
-                    .view(torch.float8_e8m0fnu)
-                    .to(torch.float32),
-                    requires_grad=False,
-                )
-                layer.w2_weight_scale_inv = Parameter(
-                    w2_s.view(torch.uint8).view(torch.float8_e8m0fnu).to(torch.float32),
-                    requires_grad=False,
-                )
-            # else: float32 scales are already usable directly
+            # and precompute dequant scales for the Triton fallback.
+            layer._sm120_triton_w13_scale = self._fold_global_scale_for_triton(
+                layer.w13_weight_scale.data,
+                layer.w13_weight_scale_2.data,
+                is_w13=True,
+            )
+            layer._sm120_triton_w2_scale = self._fold_global_scale_for_triton(
+                layer.w2_weight_scale.data,
+                layer.w2_weight_scale_2.data,
+                is_w13=False,
+            )
             layer._dsv4_mxfp4_backend = "sm120_triton"
 
-            # Opt-in: flashinfer native CuTe-DSL fused MoE (faster than triton).
+            # FlashInfer's SM120 b12x W4A4 path currently does not match the
+            # NVIDIA DeepSeek-V4-Flash-NVFP4 checkpoint scale semantics used by
+            # this wrapper. Keep the correct Triton path even when the old opt-in
+            # env is set; otherwise decode can produce corrupted text.
             from sglang.srt.environ import envs
 
             if envs.SGLANG_OPT_USE_SM120_CUTEDSL_MOE.get():
-                try:
-                    from sglang.srt.layers.moe.fused_moe_triton.mxfp4_moe_sm120_cutedsl import (
-                        prepare_sm120_cutedsl_weights,
-                    )
-
-                    prepare_sm120_cutedsl_weights(layer)
-                    layer._dsv4_mxfp4_backend = "sm120_cutedsl"
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "SM120 CuTe-DSL MoE prepare failed (%s); "
-                        "falling back to sm120_triton.",
-                        e,
-                    )
+                logger.warning_once(
+                    "SGLANG_OPT_USE_SM120_CUTEDSL_MOE is ignored for "
+                    "DeepSeek-V4 NVFP4 experts on SM120 because the b12x W4A4 "
+                    "scale mapping is not numerically compatible yet; using "
+                    "sm120_triton for correctness."
+                )
             return
 
         if not check_moe_marlin_supports_layer(layer, 32):
@@ -219,6 +262,7 @@ class Mxfp4MarlinMoEMethod:
                 num_experts=p.w13.shape[0],
                 num_local_experts=p.w13.shape[0],
                 top_k=topk_output.topk_ids.shape[-1],
+                quant_mode=getattr(p, "quant_mode", "nvfp4"),
             )
             return self.runner.run(dispatch_output, quant_info)
 
@@ -231,8 +275,8 @@ class Mxfp4MarlinMoEMethod:
             hidden_states = dispatch_output.hidden_states
             w13 = layer.w13_weight.data
             w2 = layer.w2_weight.data
-            w13_scale = layer.w13_weight_scale_inv.data
-            w2_scale = layer.w2_weight_scale_inv.data
+            w13_scale = layer._sm120_triton_w13_scale
+            w2_scale = layer._sm120_triton_w2_scale
             intermediate_size = w13.shape[1] // 2
             hidden_size = w13.shape[2] * 2
 
