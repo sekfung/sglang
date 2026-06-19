@@ -368,6 +368,22 @@ class Sm120CuteDslNvfp4MoeQuantInfo(MoeQuantInfo):
     top_k: int
 
 
+@dataclass
+class Sm120CuteDslMxfp4MoeQuantInfo(MoeQuantInfo):
+    """Quantization payload for DeepSeekV4 MXFP4 experts on SM120 b12x."""
+
+    w13_weight: torch.Tensor
+    w13_weight_sf: torch.Tensor
+    w1_alpha: torch.Tensor
+    w2_weight: torch.Tensor
+    w2_weight_sf: torch.Tensor
+    w2_alpha: torch.Tensor
+    fc2_input_scale: torch.Tensor
+    num_experts: int
+    num_local_experts: int
+    top_k: int
+
+
 @register_fused_func("none", "flashinfer_cutedsl")
 def fused_experts_none_to_flashinfer_cutedsl_fp4(
     dispatch_output: StandardDispatchOutput,
@@ -378,7 +394,9 @@ def fused_experts_none_to_flashinfer_cutedsl_fp4(
     from sglang.srt.layers.moe.topk import TopKOutputChecker
     from sglang.srt.layers.quantization.fp4_utils import fp4_quantize
 
-    if isinstance(quant_info, Sm120CuteDslNvfp4MoeQuantInfo):
+    if isinstance(
+        quant_info, (Sm120CuteDslNvfp4MoeQuantInfo, Sm120CuteDslMxfp4MoeQuantInfo)
+    ):
         from flashinfer import b12x_fused_moe
 
         hidden_states = dispatch_output.hidden_states
@@ -419,7 +437,11 @@ def fused_experts_none_to_flashinfer_cutedsl_fp4(
             fc2_input_scale=quant_info.fc2_input_scale,
             num_local_experts=quant_info.num_local_experts,
             activation=runner_config.activation,
-            quant_mode="nvfp4",
+            quant_mode=(
+                "nvfp4_sf32"
+                if isinstance(quant_info, Sm120CuteDslMxfp4MoeQuantInfo)
+                else "nvfp4"
+            ),
             output=output,
         )
         return StandardCombineInput(hidden_states=out)

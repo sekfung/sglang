@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import torch
 from torch.nn import Module
 
+from sglang.srt.environ import envs
 from sglang.srt.layers.moe.moe_runner.marlin import MarlinMoeQuantInfo
 from sglang.srt.layers.moe.utils import MoeRunnerBackend
 from sglang.srt.utils import log_info_on_rank0, set_weight_attrs
@@ -27,7 +28,12 @@ class Mxfp4MarlinMoEMethod:
     def create_moe_runner(self, layer, moe_runner_config):
         from sglang.srt.layers.moe.moe_runner import MoeRunner
 
-        self.runner = MoeRunner(MoeRunnerBackend.MARLIN, moe_runner_config)
+        runner_backend = MoeRunnerBackend.MARLIN
+        if is_sm120_supported() and envs.SGLANG_OPT_USE_SM120_CUTEDSL_MOE.get():
+            import sglang.srt.layers.moe.moe_runner.flashinfer_cutedsl  # noqa: F401
+
+            runner_backend = MoeRunnerBackend.FLASHINFER_CUTEDSL
+        self.runner = MoeRunner(runner_backend, moe_runner_config)
 
     def create_weights(
         self,
@@ -197,22 +203,24 @@ class Mxfp4MarlinMoEMethod:
 
         # SM120: flashinfer native CuTe-DSL fused MoE (opt-in, fastest path)
         if layer._dsv4_mxfp4_backend == "sm120_cutedsl":
-            from sglang.srt.layers.moe.fused_moe_triton.mxfp4_moe_sm120_cutedsl import (
-                mxfp4_moe_forward_sm120_cutedsl,
+            from sglang.srt.layers.moe.moe_runner.flashinfer_cutedsl import (
+                Sm120CuteDslMxfp4MoeQuantInfo,
             )
 
-            hidden_states = dispatch_output.hidden_states
-            num_experts = layer.w13_weight.shape[0]
-            top_k = topk_output.topk_ids.shape[-1]
-            output = mxfp4_moe_forward_sm120_cutedsl(
-                layer,
-                hidden_states=hidden_states,
-                topk_ids=topk_output.topk_ids,
-                topk_weights=topk_output.topk_weights,
-                num_experts=num_experts,
-                top_k=top_k,
+            p = layer._sm120_cutedsl_packed
+            quant_info = Sm120CuteDslMxfp4MoeQuantInfo(
+                w13_weight=p.w13,
+                w13_weight_sf=p.w13_scale,
+                w1_alpha=p.w13_global_scale,
+                w2_weight=p.w2,
+                w2_weight_sf=p.w2_scale,
+                w2_alpha=p.w2_global_scale,
+                fc2_input_scale=p.fc2_input_scale,
+                num_experts=p.w13.shape[0],
+                num_local_experts=p.w13.shape[0],
+                top_k=topk_output.topk_ids.shape[-1],
             )
-            return StandardCombineInput(hidden_states=output)
+            return self.runner.run(dispatch_output, quant_info)
 
         # SM120: use Triton fused dequant+GEMM (Marlin kernel produces NaN on SM120)
         if layer._dsv4_mxfp4_backend == "sm120_triton":
