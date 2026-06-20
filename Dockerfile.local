@@ -90,6 +90,16 @@ ARG MAX_JOBS
 ARG USE_MIRRORS
 ARG PIP_INDEX_URL
 
+# Configure cargo mirror for faster crate downloads in China
+RUN mkdir -p /root/.cargo && printf '\
+[source.crates-io]\n\
+replace-with = "rsproxy"\n\
+[source.rsproxy]\n\
+registry = "https://rsproxy.cn/crates.io-index.git"\n\
+[net]\n\
+git-fetch-with-cli = true\n\
+' > /root/.cargo/config.toml
+
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install maturin
 
