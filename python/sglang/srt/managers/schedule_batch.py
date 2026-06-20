@@ -712,7 +712,7 @@ class Req(ReqDllmMixin):
     ):
         # Input and output info
         self.rid = rid
-        self.origin_input_ids = origin_input_ids
+        self.origin_input_ids = list(origin_input_ids) if not isinstance(origin_input_ids, list) else origin_input_ids
         self.origin_input_ids_unpadded = (
             origin_input_ids_unpadded
             if origin_input_ids_unpadded
@@ -722,7 +722,7 @@ class Req(ReqDllmMixin):
         # _refresh_fill_ids infers how many output tokens are already in
         # full_untruncated_fill_ids from lengths alone, so in-place rewrites
         # that preserve length would silently corrupt fill_ids.
-        self.output_ids = array("q")
+        self.output_ids = []
         # Full untruncated sequence: origin + output (+ DLLM mask block).
         # Kept in sync by _refresh_fill_ids; admission only updates
         # extend_range, never mutates this array's length.
@@ -1482,7 +1482,7 @@ class Req(ReqDllmMixin):
         # Therefore, we discard the generated output_ids and restart prefill and generation
         # to ensure shape consistency in KV cache.
         if self.input_embeds is not None:
-            self.output_ids = array("q")
+            self.output_ids = []
 
     def offload_kv_cache(self, req_to_token_pool, token_to_kv_pool_allocator):
         token_indices = req_to_token_pool.req_to_token[
