@@ -149,9 +149,15 @@ class OpenAIServingBase(ABC):
         return f"{self._request_id_prefix()}{uuid.uuid4().hex}"
 
     def _compute_extra_key(self, request: OpenAIServingRequest) -> Optional[str]:
-        """Compute the final extra_key by concatenating cache_salt and extra_key if both are provided."""
+        """Compute the final extra_key for radix-cache partitioning.
+
+        Concatenates ``cache_salt``, ``extra_key`` and OpenAI's
+        ``prompt_cache_key`` (when present). Folding ``prompt_cache_key`` in
+        gives it real effect: requests sharing a prefix only reuse cached KV
+        when their ``prompt_cache_key`` matches, mirroring OpenAI's semantics.
+        """
         parts = []
-        for key in ["cache_salt", "extra_key"]:
+        for key in ["cache_salt", "extra_key", "prompt_cache_key"]:
             value = getattr(request, key, None)
             if value:
                 if not isinstance(value, str):

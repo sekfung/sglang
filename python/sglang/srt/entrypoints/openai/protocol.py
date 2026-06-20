@@ -946,6 +946,22 @@ class ChatCompletionRequest(BaseModel):
 
         return values
 
+    @model_validator(mode="after")
+    def propagate_verbosity(self):
+        """Surface OpenAI ``verbosity`` to the chat template.
+
+        Local models have no native verbosity knob, but exposing it through
+        ``chat_template_kwargs`` lets templates that reference ``verbosity``
+        (e.g. a system-prompt hint) honor it. Templates that ignore the key
+        are unaffected. An explicit ``chat_template_kwargs["verbosity"]``
+        always wins.
+        """
+        if self.verbosity is not None:
+            ctk = self.chat_template_kwargs or {}
+            ctk.setdefault("verbosity", self.verbosity)
+            self.chat_template_kwargs = ctk
+        return self
+
     def to_sampling_params(
         self,
         stop: List[str],
@@ -1686,6 +1702,7 @@ class ResponsesResponse(BaseModel):
     max_output_tokens: Optional[int] = None
     max_tool_calls: Optional[int] = None
     previous_response_id: Optional[str] = None
+    conversation: Optional[Union[str, Dict[str, Any]]] = None
     service_tier: Optional[str] = None
     safety_identifier: Optional[str] = None
     prompt_cache_key: Optional[str] = None
@@ -1773,6 +1790,7 @@ class ResponsesResponse(BaseModel):
             max_output_tokens=request.max_output_tokens,
             max_tool_calls=request.max_tool_calls,
             previous_response_id=request.previous_response_id,  # TODO(v): ensure this is propagated if retrieved from store
+            conversation=request.conversation,
             reasoning={
                 "effort": request.reasoning.effort if request.reasoning else None,
                 "summary": request.reasoning.summary if request.reasoning else None,

@@ -135,6 +135,12 @@ class OpenAIServingResponses(OpenAIServingChat):
             str, Union[list[ChatCompletionMessageParam], list[OpenAIMessage]]
         ] = {}
 
+        # Maps an OpenAI ``conversation`` id to the latest ``response`` id in
+        # that conversation. Lets the ``conversation`` request field provide
+        # stateful continuity by reusing the ``previous_response_id`` history
+        # machinery (response id == request_id, so this is set up-front).
+        self.conversation_store: dict[str, str] = {}
+
         self.background_tasks: dict[str, asyncio.Task] = {}
 
     @staticmethod
@@ -176,6 +182,32 @@ class OpenAIServingResponses(OpenAIServingChat):
 
     def _request_id_prefix(self) -> str:
         return "resp_"
+
+    @staticmethod
+    def _resolve_conversation_id(request: ResponsesRequest) -> Optional[str]:
+        """Extract the conversation id from the ``conversation`` field.
+
+        OpenAI accepts either a bare id string (``"conv_123"``) or an object
+        (``{"id": "conv_123"}``). Returns ``None`` when unset.
+        """
+        conv = getattr(request, "conversation", None)
+        if conv is None:
+            return None
+        if isinstance(conv, str):
+            return conv or None
+        if isinstance(conv, dict):
+            cid = conv.get("id")
+            return cid if isinstance(cid, str) and cid else None
+        return None
+
+    def _should_persist(self, request: ResponsesRequest) -> bool:
+        """Whether to persist this turn's messages/response.
+
+        Storage is required both when the client opts in via ``store`` and
+        whenever a ``conversation`` is attached, since conversation continuity
+        depends on the stored history.
+        """
+        return bool(request.store) or self._resolve_conversation_id(request) is not None
 
     async def create_responses(
         self,
@@ -221,6 +253,20 @@ class OpenAIServingResponses(OpenAIServingChat):
                 return self._make_not_found_error(prev_response_id)
         else:
             prev_response = None
+
+        # Resolve stateful ``conversation`` continuity. When no explicit
+        # previous_response_id was given, fall back to the latest response
+        # tracked for this conversation so history is carried forward. The
+        # lookup is defensive: a dangling mapping (e.g. after a failed turn
+        # whose response was never stored) silently starts a fresh chain.
+        conversation_id = self._resolve_conversation_id(request)
+        if prev_response is None and conversation_id is not None:
+            async with self.response_store_lock:
+                mapped_id = self.conversation_store.get(conversation_id)
+                if mapped_id is not None:
+                    candidate = self.response_store.get(mapped_id)
+                    if candidate is not None and mapped_id in self.msg_store:
+                        prev_response = candidate
 
         try:
             model_name = request.model
@@ -382,8 +428,14 @@ class OpenAIServingResponses(OpenAIServingChat):
             (result_generator,) = generators
 
             # Store the input messages
-            if request.store:
+            if self._should_persist(request):
                 self.msg_store[request.request_id] = messages
+                # Point the conversation at this turn's response (response id
+                # == request_id), so the next request in the conversation
+                # continues from here.
+                if conversation_id is not None:
+                    async with self.response_store_lock:
+                        self.conversation_store[conversation_id] = request.request_id
 
             if request.background:
                 created_time = int(time.time())
@@ -611,7 +663,7 @@ class OpenAIServingResponses(OpenAIServingChat):
             usage=usage,
         )
 
-        if request.store:
+        if self._should_persist(request):
             async with self.response_store_lock:
                 stored_response = self.response_store.get(response.id)
                 # If the response is already cancelled, don't update it
@@ -2291,7 +2343,7 @@ class OpenAIServingResponses(OpenAIServingChat):
             status="completed",
             usage=usage,
         )
-        if request.store:
+        if self._should_persist(request):
             async with self.response_store_lock:
                 stored = self.response_store.get(final_response.id)
                 if stored is None or stored.status != "cancelled":
