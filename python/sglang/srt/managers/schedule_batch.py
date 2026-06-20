@@ -1123,7 +1123,7 @@ class Req(ReqDllmMixin):
         ):
             self.full_untruncated_fill_ids.extend(self.output_ids[n_have_output:])
         else:
-            self.full_untruncated_fill_ids = self.origin_input_ids + self.output_ids
+            self.full_untruncated_fill_ids = list(self.origin_input_ids) + list(self.output_ids)
 
     def init_next_round_input(
         self,
@@ -1242,7 +1242,7 @@ class Req(ReqDllmMixin):
                 self.read_offset - INIT_INCREMENTAL_DETOKENIZATION_OFFSET, 0
             )
             self.surr_and_decode_ids = (
-                self.origin_input_ids_unpadded[self.surr_offset :] + output_ids
+                list(self.origin_input_ids_unpadded[self.surr_offset :]) + list(output_ids)
             )
             self.cur_decode_ids_len = len(output_ids)
         else:
