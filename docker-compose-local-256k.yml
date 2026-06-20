@@ -58,7 +58,7 @@ services:
       - --enable-prefill-cp
       - --cp-strategy
       - interleave
-      - --enable-mixed-chunk
-      - --cuda-graph-backend-decode
-      - breakable
+      # MTP(EAGLE): server_args 断言 NOT enable_mixed_chunk, 且 breakable graph
+      # 与投机 capture 不兼容 → 两者均已移除, decode 用默认 full graph。
+      # (SGLANG_USE_BREAKABLE_CUDA_GRAPH 环境变量保留无害, 无命令flag时不生效)
     restart: unless-stopped

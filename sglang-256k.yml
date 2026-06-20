@@ -45,3 +45,14 @@ reasoning-parser: deepseek-v4
 # --- 稳定性 ---
 watchdog-timeout: 3600
 log-level: info
+
+# --- MTP 投机解码 (EAGLE wire path, 主权重内置 NextN head, 无需 draft model) ---
+# ⚠️ 配套 compose 必须去掉 --enable-mixed-chunk 和 --cuda-graph-backend-decode breakable
+# ⚠️ 256K 显存极紧 (mem-fraction 0.67 已接近 indexer OOM 上限), MTP 额外占用:
+#    NextN draft 权重 + draft cuda graph capture。未在 256K 实测, 首次启动若 OOM,
+#    需下调 mem-fraction-static 或 cuda-graph-max-bs。
+# 权衡: prefill/TTFT ~+9% (256K 长上下文绝对值更大), 换 decode ~2x
+speculative-algorithm: EAGLE
+speculative-num-steps: 3
+speculative-eagle-topk: 1
+speculative-num-draft-tokens: 4

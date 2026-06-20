@@ -41,3 +41,12 @@ reasoning-parser: deepseek-v4
 # --- 稳定性 ---
 watchdog-timeout: 3600
 log-level: info
+
+# --- MTP 投机解码 (EAGLE wire path, 主权重内置 NextN head, 无需 draft model) ---
+# 验证: 2026-06-20, 编码场景 accept_len 2.6~2.8, decode ~2x; 见 deepseek_v4_hook 约束
+# ⚠️ 配套 compose 必须去掉 --enable-mixed-chunk 和 --cuda-graph-backend-decode breakable
+# 权衡: prefill/TTFT ~+9% (draft head 多一遍 prefill), 换 decode ~2x
+speculative-algorithm: EAGLE
+speculative-num-steps: 3
+speculative-eagle-topk: 1
+speculative-num-draft-tokens: 4
