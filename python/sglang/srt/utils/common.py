@@ -121,7 +121,11 @@ def flatten_arrays_to_pinned_cpu(parts: List[array[int]], pin: bool) -> torch.Te
     NumPy memcpy instead of a per-element PyLong-to-int64 walk. Stays on
     (optionally pinned) CPU; H2D is the caller's job.
     """
-    combined = np.concatenate([np.frombuffer(p, dtype=np.int64) for p in parts])
+    arrays = [
+        np.array(p, dtype=np.int64) if not isinstance(p, array) else np.frombuffer(p, dtype=np.int64)
+        for p in parts
+    ]
+    combined = np.concatenate(arrays)
     cpu_t = torch.from_numpy(combined)
     if pin:
         cpu_t = cpu_t.pin_memory()
