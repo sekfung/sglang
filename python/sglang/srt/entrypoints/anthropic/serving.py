@@ -35,12 +35,14 @@ from sglang.srt.entrypoints.anthropic.protocol import (
     MessageDeltaEvent,
     MessageStartEvent,
     MessageStopEvent,
+    ServerToolUseBlock,
     SignatureDelta,
     TextBlock,
     TextDelta,
     ThinkingBlock,
     ThinkingDelta,
     ToolUseBlock,
+    WebSearchToolResultBlock,
     is_server_tool,
 )
 from sglang.srt.entrypoints.openai.protocol import (
@@ -480,6 +482,69 @@ class AnthropicServing:
                     if image_part is not None:
                         content_parts.append(image_part)
 
+                elif block.type == "document":
+                    # Convert document blocks to text context so the model
+                    # still receives the document's content even though the
+                    # local backend has no native PDF renderer.
+                    doc_parts = []
+                    if block.title:
+                        doc_parts.append(f"Document: {block.title}")
+                    if block.context:
+                        doc_parts.append(block.context)
+                    source = block.source if isinstance(block.source, dict) else {}
+                    src_type = source.get("type")
+                    if src_type == "text":
+                        data = source.get("data") or source.get("text", "")
+                        if data:
+                            doc_parts.append(data)
+                    elif src_type in ("base64", "url"):
+                        # Can't inline binary/remote content as text; at
+                        # minimum tell the model a document was attached.
+                        media = source.get("media_type", "document")
+                        if src_type == "url":
+                            ref = source.get("url", "")
+                            doc_parts.append(f"[{media} attached: {ref}]")
+                        else:
+                            doc_parts.append(f"[{media} document attached]")
+                    if doc_parts:
+                        content_parts.append(
+                            {"type": "text", "text": "\n".join(doc_parts)}
+                        )
+
+                elif block.type == "server_tool_use":
+                    # Built-in server tool calls in assistant history (e.g.
+                    # web_search, code_interpreter). The local backend cannot
+                    # replay these, so we surface the call as a pseudo
+                    # function call so downstream templates see a valid
+                    # tool-call record rather than silent omission.
+                    tool_call = {
+                        "id": block.id or f"call_{uuid.uuid4().hex}",
+                        "type": "function",
+                        "function": {
+                            "name": block.name or "",
+                            "arguments": json.dumps(block.input or {}),
+                        },
+                    }
+                    tool_calls.append(tool_call)
+
+                elif block.type == "web_search_tool_result":
+                    # Web-search results that pair with a server_tool_use
+                    # block. Render as a tool-result message so the model
+                    # sees the search context in the conversation history.
+                    search_text = _text_from_search_result(block.model_dump())
+                    tool_call_id = block.tool_use_id or ""
+                    if msg.role == "user":
+                        _emit_user_message(content_parts)
+                        openai_messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call_id,
+                                "content": search_text or "[web search result]",
+                            }
+                        )
+                    elif search_text:
+                        content_parts.append({"type": "text", "text": search_text})
+
                 elif block.type == "search_result":
                     search_text = _text_from_search_result(block.model_dump())
                     if search_text:
@@ -639,6 +704,19 @@ class AnthropicServing:
                 anthropic_request.betas,
             )
 
+        if anthropic_request.mcp_servers:
+            logger.info(
+                "Anthropic request includes mcp_servers config — "
+                "no-op locally (no MCP proxy support in the OpenAI-compatible backend)"
+            )
+
+        if anthropic_request.container:
+            logger.info(
+                "Anthropic request specifies container=%r — "
+                "no-op locally (no container isolation in the OpenAI-compatible backend)",
+                anthropic_request.container,
+            )
+
         # Convert tools. Deferred tools stay in the list with defer_loading=True;
         # the chat template hides them from the initial <tools> block and renders
         # them on demand when a tool_reference block names them.
@@ -772,7 +850,9 @@ class AnthropicServing:
 
         # Convert to Anthropic response
         anthropic_response = self._convert_response(
-            response, suppress_reasoning=_reasoning_display_omitted(anthropic_request)
+            response,
+            suppress_reasoning=_reasoning_display_omitted(anthropic_request),
+            anthropic_request=anthropic_request,
         )
         return JSONResponse(content=anthropic_response.model_dump(exclude_none=True))
 
@@ -1259,6 +1339,7 @@ class AnthropicServing:
         self,
         response: ChatCompletionResponse,
         suppress_reasoning: bool = False,
+        anthropic_request=None,
     ) -> AnthropicMessagesResponse:
         """Convert an OpenAI ChatCompletionResponse to an Anthropic Messages response.
 
@@ -1339,6 +1420,9 @@ class AnthropicServing:
                 response.usage,
                 include_input=True,
                 include_output=True,
+            ),
+            service_tier=(
+                anthropic_request.service_tier if anthropic_request is not None else None
             ),
         )
 

@@ -51,9 +51,22 @@ class AnthropicUsage(BaseModel):
 # ---------- Content blocks (discriminated by ``type``) ----------
 
 
+class CacheControl(BaseModel):
+    """Anthropic prompt-caching marker.
+
+    The only supported value is ``"ephemeral"`` (a 5-minute cache TTL).
+    Attach to content blocks, tools, or messages to trigger caching.
+    """
+
+    type: Literal["ephemeral"] = "ephemeral"
+
+
 class TextBlock(BaseModel):
     type: Literal["text"] = "text"
     text: str
+    # Inline citations returned by Claude 3.7+ when citations are enabled.
+    citations: Optional[list[dict[str, Any]]] = None
+    cache_control: Optional[CacheControl] = None
 
 
 class ImageBlock(BaseModel):
@@ -61,6 +74,25 @@ class ImageBlock(BaseModel):
     # Kept loosely typed for compat with both base64 and URL sources; the
     # serving layer normalises to OpenAI ``image_url`` parts.
     source: Optional[Union[dict[str, Any], str]] = None
+    cache_control: Optional[CacheControl] = None
+
+
+class DocumentBlock(BaseModel):
+    """Anthropic document block (PDF, plain-text, URL, or HTML).
+
+    ``source`` variants:
+    * ``{"type": "base64", "media_type": "application/pdf", "data": "..."}``
+    * ``{"type": "url", "url": "https://..."}``
+    * ``{"type": "text", "data": "..."}``
+    * ``{"type": "html", "data": "..."}``
+    """
+
+    type: Literal["document"] = "document"
+    source: dict[str, Any]
+    title: Optional[str] = None
+    context: Optional[str] = None
+    citations: Optional[dict[str, Any]] = None
+    cache_control: Optional[CacheControl] = None
 
 
 class ToolUseBlock(BaseModel):
@@ -68,6 +100,7 @@ class ToolUseBlock(BaseModel):
     id: str
     name: str
     input: dict[str, Any] = Field(default_factory=dict)
+    cache_control: Optional[CacheControl] = None
 
 
 class ToolResultBlock(BaseModel):
@@ -77,6 +110,7 @@ class ToolResultBlock(BaseModel):
     id: Optional[str] = None
     content: Optional[Union[str, list["AnthropicContentBlock"]]] = None
     is_error: Optional[bool] = None
+    cache_control: Optional[CacheControl] = None
 
 
 class ToolReferenceBlock(BaseModel):
@@ -87,6 +121,36 @@ class ToolReferenceBlock(BaseModel):
     # Anthropic-style payloads sometimes use ``tool_name``; accept both.
     tool_name: Optional[str] = None
     id: Optional[str] = None
+
+
+class ServerToolUseBlock(BaseModel):
+    """Block emitted when Claude invokes a built-in Anthropic server tool
+    (e.g. ``web_search``, ``code_interpreter``).
+
+    These blocks appear in *assistant* messages of multi-turn conversations
+    when server-side tools are enabled.  SGLang cannot replay or re-execute
+    server tool calls locally, so the serving layer skips them during history
+    reconstruction and logs a notice.
+    """
+
+    type: Literal["server_tool_use"] = "server_tool_use"
+    id: str
+    name: str
+    input: dict[str, Any] = Field(default_factory=dict)
+
+
+class WebSearchToolResultBlock(BaseModel):
+    """Result block produced after a ``web_search`` server-tool call.
+
+    Appears in *user* turns of multi-turn conversations following a
+    ``server_tool_use`` block.  The serving layer renders these as
+    plain-text context, similar to ``search_result`` blocks.
+    """
+
+    type: Literal["web_search_tool_result"] = "web_search_tool_result"
+    tool_use_id: str
+    content: Optional[Union[str, list[dict[str, Any]]]] = None
+    is_error: Optional[bool] = None
 
 
 class SearchResultBlock(BaseModel):
@@ -112,9 +176,12 @@ AnthropicContentBlock = Annotated[
     Union[
         TextBlock,
         ImageBlock,
+        DocumentBlock,
         ToolUseBlock,
         ToolResultBlock,
         ToolReferenceBlock,
+        ServerToolUseBlock,
+        WebSearchToolResultBlock,
         SearchResultBlock,
         ThinkingBlock,
         RedactedThinkingBlock,
@@ -126,6 +193,8 @@ AnthropicContentBlock = Annotated[
 class AnthropicMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
     content: Union[str, list[AnthropicContentBlock]]
+    # Per-message cache breakpoint (applied to the last block of the message).
+    cache_control: Optional[CacheControl] = None
 
 
 # ---------- Tools (discriminated by ``type`` family) ----------
@@ -139,6 +208,7 @@ class AnthropicCustomTool(BaseModel):
     description: Optional[str] = None
     input_schema: dict[str, Any]
     defer_loading: Optional[bool] = None
+    cache_control: Optional[CacheControl] = None
 
     @field_validator("input_schema")
     @classmethod
@@ -164,6 +234,7 @@ class AnthropicWebSearchTool(BaseModel):
     max_uses: Optional[int] = None
     allowed_domains: Optional[list[str]] = None
     blocked_domains: Optional[list[str]] = None
+    cache_control: Optional[CacheControl] = None
 
 
 class AnthropicComputerTool(BaseModel):
@@ -176,6 +247,7 @@ class AnthropicComputerTool(BaseModel):
     display_width_px: Optional[int] = None
     display_height_px: Optional[int] = None
     display_number: Optional[int] = None
+    cache_control: Optional[CacheControl] = None
 
 
 class AnthropicBashTool(BaseModel):
@@ -185,6 +257,7 @@ class AnthropicBashTool(BaseModel):
     name: Literal["bash"] = "bash"
     description: Optional[str] = None
     defer_loading: Optional[bool] = None
+    cache_control: Optional[CacheControl] = None
 
 
 class AnthropicTextEditorTool(BaseModel):
@@ -194,6 +267,17 @@ class AnthropicTextEditorTool(BaseModel):
     name: Literal["str_replace_editor", "str_replace_based_edit_tool"]
     description: Optional[str] = None
     defer_loading: Optional[bool] = None
+    cache_control: Optional[CacheControl] = None
+
+
+class AnthropicCodeInterpreterTool(BaseModel):
+    """Anthropic ``code_interpreter_*`` server tool family."""
+
+    type: str = Field(pattern=r"^code_interpreter_\d{8}$")
+    name: Literal["code_interpreter"] = "code_interpreter"
+    description: Optional[str] = None
+    defer_loading: Optional[bool] = None
+    cache_control: Optional[CacheControl] = None
 
 
 def _tool_discriminator(v) -> str:
@@ -217,6 +301,8 @@ def _tool_discriminator(v) -> str:
         return "bash"
     if t.startswith("text_editor_"):
         return "text_editor"
+    if t.startswith("code_interpreter_"):
+        return "code_interpreter"
     return "custom"
 
 
@@ -227,6 +313,7 @@ AnthropicTool = Annotated[
         Annotated[AnthropicComputerTool, Tag("computer")],
         Annotated[AnthropicBashTool, Tag("bash")],
         Annotated[AnthropicTextEditorTool, Tag("text_editor")],
+        Annotated[AnthropicCodeInterpreterTool, Tag("code_interpreter")],
     ],
     Discriminator(_tool_discriminator),
 ]
@@ -241,6 +328,7 @@ def is_server_tool(tool) -> bool:
             AnthropicComputerTool,
             AnthropicBashTool,
             AnthropicTextEditorTool,
+            AnthropicCodeInterpreterTool,
         ),
     )
 
@@ -250,6 +338,7 @@ class AnthropicToolChoice(BaseModel):
 
     type: Literal["auto", "any", "tool", "none"]
     name: Optional[str] = None
+    disable_parallel_tool_use: Optional[bool] = None
 
 
 class AnthropicThinkingParam(BaseModel):
@@ -349,6 +438,7 @@ class AnthropicCountTokensRequest(BaseModel):
     thinking: Optional[AnthropicThinkingParam] = None
     tool_choice: Optional[AnthropicToolChoice] = None
     tools: Optional[list[AnthropicTool]] = None
+    mcp_servers: Optional[list[dict[str, Any]]] = None
     # Claude 4.7 / SDK-compatibility fields. Accepted but no-op on count.
     output_config: Optional[AnthropicOutputConfig] = None
     betas: Optional[list[str]] = None
@@ -376,6 +466,15 @@ class AnthropicMessagesRequest(BaseModel):
     tools: Optional[list[AnthropicTool]] = None
     top_k: Optional[int] = None
     top_p: Optional[float] = None
+    # Specifies the processing tier. Accepted for API compatibility; echoed
+    # back on the response but not used for local routing.
+    service_tier: Optional[Literal["auto", "standard", "priority"]] = None
+    # Container identifier for computer-use sessions. Accepted for API
+    # compatibility; the local backend has no container isolation.
+    container: Optional[str] = None
+    # MCP server configurations. Accepted for API compatibility; the local
+    # backend has no MCP proxy — these are logged and ignored.
+    mcp_servers: Optional[list[dict[str, Any]]] = None
     # Claude 4.7 fields. The Anthropic SDK / Claude Code attach these even
     # when targeting non-Anthropic backends, so the schema must accept them.
     output_config: Optional[AnthropicOutputConfig] = None
@@ -436,7 +535,7 @@ class AnthropicMessageEndDelta(BaseModel):
     """
 
     stop_reason: Optional[
-        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
+        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn"]
     ] = None
     stop_sequence: Optional[str] = None
 
@@ -509,10 +608,12 @@ class AnthropicMessagesResponse(BaseModel):
     content: list[AnthropicContentBlock]
     model: str
     stop_reason: Optional[
-        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
+        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn"]
     ] = None
     stop_sequence: Optional[str] = None
     usage: Optional[AnthropicUsage] = None
+    # Echoed back from the request for API compatibility.
+    service_tier: Optional[str] = None
 
 
 # Resolve forward references for nested types.
