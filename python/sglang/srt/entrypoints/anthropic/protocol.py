@@ -270,8 +270,10 @@ class AnthropicThinkingParam(BaseModel):
     equivalent. ``budget_tokens`` is accepted on ``enabled`` for SDK
     compatibility but the backend has no hard-cap knob to honor it; the
     serving layer logs a WARNING so operators see that the requested
-    budget is not enforced. ``display="omitted"`` is accepted but
-    similarly cannot suppress reasoning mid-stream and is logged.
+    budget is not enforced. ``display="omitted"`` keeps reasoning enabled
+    but suppresses the reasoning text in the response — the serving layer
+    drops thinking content blocks from both streaming and non-streaming
+    output (see ``_reasoning_display_omitted``).
     """
 
     type: Literal["enabled", "disabled", "adaptive"]

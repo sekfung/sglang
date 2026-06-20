@@ -181,6 +181,19 @@ def _scrub_error_message(message: str, status_code: int) -> str:
     return cleaned or "Request failed"
 
 
+def _reasoning_display_omitted(anthropic_request) -> bool:
+    """Whether the client asked to hide reasoning text from the response.
+
+    Anthropic 4.7's ``thinking.display="omitted"`` keeps reasoning ON
+    (the model still thinks) but the reasoning text must NOT be surfaced
+    to the client. The protocol layer only allows ``display`` on the
+    ``enabled``/``adaptive`` variants, so a truthy result here always
+    implies reasoning is active.
+    """
+    thinking = anthropic_request.thinking
+    return thinking is not None and thinking.display == "omitted"
+
+
 class AnthropicServing:
     """Handler for Anthropic Messages API requests.
 
@@ -585,13 +598,13 @@ class AnthropicServing:
             enabled = anthropic_request.thinking.type != "disabled"
             if anthropic_request.thinking.display == "omitted":
                 # Anthropic 4.7 spec: keep reasoning ON but hide reasoning
-                # text from the client. The OpenAI streaming pipeline has
-                # no equivalent suppress knob — log so operators can see
-                # the request, then proceed with normal reasoning emission.
-                logger.warning(
-                    "Anthropic thinking.display='omitted' is accepted for "
-                    "SDK compatibility but reasoning text will still be "
-                    "emitted to the client"
+                # text from the client. We honor this in the response
+                # builders (_convert_response / _generate_anthropic_stream)
+                # by dropping reasoning content blocks; see
+                # _reasoning_display_omitted.
+                logger.debug(
+                    "Anthropic thinking.display='omitted': reasoning stays "
+                    "enabled but its text will be suppressed in the response"
                 )
             self.openai_serving_chat.apply_reasoning_enabled(chat_request, enabled)
 
@@ -758,7 +771,9 @@ class AnthropicServing:
             return self._convert_openai_error_response(response)
 
         # Convert to Anthropic response
-        anthropic_response = self._convert_response(response)
+        anthropic_response = self._convert_response(
+            response, suppress_reasoning=_reasoning_display_omitted(anthropic_request)
+        )
         return JSONResponse(content=anthropic_response.model_dump(exclude_none=True))
 
     async def _handle_streaming(
@@ -832,6 +847,7 @@ class AnthropicServing:
         had_content_delta = False
         message_id = f"msg_{uuid.uuid4().hex}"
         model = anthropic_request.model
+        suppress_reasoning = _reasoning_display_omitted(anthropic_request)
 
         def _message_start_event(usage) -> MessageStartEvent:
             return MessageStartEvent(
@@ -1146,19 +1162,27 @@ class AnthropicServing:
 
             # Handle reasoning content deltas
             if delta.reasoning_content:
-                for event in _ensure_content_block_events(
-                    "thinking",
-                    ThinkingBlock(thinking=""),
-                ):
-                    yield _emit(event)
+                if suppress_reasoning:
+                    # thinking.display="omitted": the backend still produced
+                    # reasoning, but the client asked to hide it. Emit no
+                    # thinking events; still mark content seen so the
+                    # "silent drop" guard at [DONE] does not false-fire on a
+                    # reasoning-only completion.
+                    had_content_delta = True
+                else:
+                    for event in _ensure_content_block_events(
+                        "thinking",
+                        ThinkingBlock(thinking=""),
+                    ):
+                        yield _emit(event)
 
-                yield _emit(
-                    ContentBlockDeltaEvent(
-                        index=content_block_index,
-                        delta=ThinkingDelta(thinking=delta.reasoning_content),
+                    yield _emit(
+                        ContentBlockDeltaEvent(
+                            index=content_block_index,
+                            delta=ThinkingDelta(thinking=delta.reasoning_content),
+                        )
                     )
-                )
-                had_content_delta = True
+                    had_content_delta = True
 
             # Handle tool call deltas
             if delta.tool_calls:
@@ -1232,9 +1256,16 @@ class AnthropicServing:
                 had_content_delta = True
 
     def _convert_response(
-        self, response: ChatCompletionResponse
+        self,
+        response: ChatCompletionResponse,
+        suppress_reasoning: bool = False,
     ) -> AnthropicMessagesResponse:
-        """Convert an OpenAI ChatCompletionResponse to an Anthropic Messages response."""
+        """Convert an OpenAI ChatCompletionResponse to an Anthropic Messages response.
+
+        When ``suppress_reasoning`` is set (``thinking.display="omitted"``),
+        the reasoning text is dropped from the returned content blocks even
+        though the backend produced it.
+        """
         if not response.choices:
             return AnthropicMessagesResponse(
                 content=[TextBlock(text="")],
@@ -1248,8 +1279,10 @@ class AnthropicServing:
 
         # Add reasoning content as a thinking block. signature is omitted
         # entirely when the backend doesn't provide one — empty strings
-        # would fail downstream Anthropic signature verifiers.
-        if choice.message.reasoning_content:
+        # would fail downstream Anthropic signature verifiers. When the
+        # client requested thinking.display="omitted" we skip the block
+        # entirely so reasoning never reaches the client.
+        if choice.message.reasoning_content and not suppress_reasoning:
             content.append(ThinkingBlock(thinking=choice.message.reasoning_content))
 
         # Add text content

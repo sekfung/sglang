@@ -772,12 +772,11 @@ class TestAnthropicServing(unittest.TestCase):
         serving._convert_to_chat_completion_request(request)
         self.assertEqual(serving.openai_serving_chat.apply_reasoning_calls, [True])
 
-    def test_request_thinking_display_omitted_logs_warning_but_still_enables(self):
-        """``thinking.display='omitted'`` is accepted; reasoning stays on
-        because we cannot suppress reasoning text from the OpenAI stream.
-        ``enabled`` requires ``budget_tokens`` per SDK shape."""
-        import logging
-
+    def test_request_thinking_display_omitted_keeps_reasoning_enabled(self):
+        """``thinking.display='omitted'`` keeps reasoning ON (the model still
+        thinks); the reasoning *text* is suppressed later in the response
+        builders, not by disabling reasoning. ``enabled`` requires
+        ``budget_tokens`` per SDK shape."""
         serving = self._serving()
         request = self._anthropic_request(
             thinking={
@@ -787,12 +786,107 @@ class TestAnthropicServing(unittest.TestCase):
             },
             stream=False,
         )
-        with self.assertLogs(
-            "sglang.srt.entrypoints.anthropic.serving", level=logging.WARNING
-        ) as log:
-            serving._convert_to_chat_completion_request(request)
+        serving._convert_to_chat_completion_request(request)
+        # Reasoning is still enabled — suppression happens at emit time.
         self.assertEqual(serving.openai_serving_chat.apply_reasoning_calls, [True])
-        self.assertTrue(any("omitted" in r for r in log.output))
+
+    def test_non_streaming_display_omitted_suppresses_thinking_block(self):
+        """``thinking.display='omitted'`` drops the thinking block from a
+        non-streaming response while keeping the text answer."""
+        response = ChatCompletionResponse.model_validate(
+            {
+                "id": "chatcmpl-test",
+                "model": "test-model",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "the answer is 4",
+                            "reasoning_content": "2 + 2 = 4",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 5,
+                    "total_tokens": 8,
+                },
+            }
+        )
+        anthropic_response = self._serving()._convert_response(
+            response, suppress_reasoning=True
+        )
+        # Only the text block survives — no thinking block leaks the reasoning.
+        self.assertEqual([block.type for block in anthropic_response.content], ["text"])
+        self.assertEqual(anthropic_response.content[0].text, "the answer is 4")
+
+    def test_stream_display_omitted_suppresses_thinking_events(self):
+        """With ``thinking.display='omitted'``, the stream emits no thinking
+        content block or thinking_delta, but the text answer still flows."""
+        serving = self._serving(
+            [
+                _chunk([_choice({"role": "assistant", "content": ""})]),
+                _chunk([_choice({"reasoning_content": "secret thoughts"})]),
+                _chunk([_choice({"content": "answer"})]),
+                _chunk([_choice({}, finish_reason="stop")]),
+                "data: [DONE]\n\n",
+            ]
+        )
+        request = self._anthropic_request(
+            thinking={"type": "enabled", "budget_tokens": 1024, "display": "omitted"}
+        )
+        events = asyncio.run(_collect_anthropic_events(serving, request))
+
+        # No thinking block opened, no thinking/signature deltas emitted.
+        thinking_blocks = [
+            event
+            for event in events
+            if event["type"] == "content_block_start"
+            and event["content_block"]["type"] == "thinking"
+        ]
+        self.assertEqual(thinking_blocks, [])
+        thinking_deltas = [
+            event
+            for event in events
+            if event["type"] == "content_block_delta"
+            and event.get("delta", {}).get("type") in ("thinking_delta", "signature_delta")
+        ]
+        self.assertEqual(thinking_deltas, [])
+        # The reasoning text never appears anywhere on the wire.
+        self.assertNotIn("secret thoughts", json.dumps(events))
+
+        # The text answer still came through as a proper text block.
+        text_deltas = [
+            event["delta"]["text"]
+            for event in events
+            if event["type"] == "content_block_delta"
+            and event["delta"].get("type") == "text_delta"
+        ]
+        self.assertEqual(text_deltas, ["answer"])
+        # Stream still terminated cleanly (no api_error injected).
+        self.assertNotIn("error", [event["type"] for event in events])
+        self.assertEqual(events[-1]["type"], "message_stop")
+
+    def test_stream_display_omitted_reasoning_only_is_not_empty_error(self):
+        """A reasoning-only completion under ``display='omitted'`` must not
+        trip the 'silent drop' api_error guard at [DONE]: the backend did
+        produce content, we just suppressed it."""
+        serving = self._serving(
+            [
+                _chunk([_choice({"role": "assistant", "content": ""})]),
+                _chunk([_choice({"reasoning_content": "only thinking"})]),
+                _chunk([_choice({}, finish_reason="stop")]),
+                "data: [DONE]\n\n",
+            ]
+        )
+        request = self._anthropic_request(
+            thinking={"type": "enabled", "budget_tokens": 1024, "display": "omitted"}
+        )
+        events = asyncio.run(_collect_anthropic_events(serving, request))
+        self.assertNotIn("error", [event["type"] for event in events])
+        self.assertEqual(events[-1]["type"], "message_stop")
 
     def test_request_output_config_effort_maps_to_reasoning_effort(self):
         """``output_config.effort`` rows map onto ``reasoning_effort``."""
