@@ -146,7 +146,8 @@ from sglang.srt.managers.io_struct import (
     UpdateWeightsFromDistributedReqInput,
     UpdateWeightsFromIPCReqInput,
     UpdateWeightsFromTensorReqInput,
-    sock_send,
+sock_send,
+    WatchLoadUpdateReq,
 )
 from sglang.srt.managers.load_snapshot import LoadSnapshot, create_load_snapshot_writer
 from sglang.srt.managers.min_free_slots_delayer import (
@@ -1442,8 +1443,22 @@ class Scheduler(
                     ListExternalCorporaReqInput,
                     self.list_external_corpora,
                 ),
+                (WatchLoadUpdateReq, self.handle_watch_load_update),
             ]
         )
+
+    def handle_watch_load_update(self, req: WatchLoadUpdateReq) -> None:
+        """Receive per-scheduler load metrics forwarded by the gRPC bridge.
+
+        Only meaningful when dp_size > 1. Single-DP deployments log the
+        event at DEBUG level and take no further action.
+        """
+        if self.server_args.dp_size > 1:
+            logger.debug(
+                "WatchLoadUpdateReq received with %d load entries (dp-aware)",
+                len(req.loads),
+            )
+        return None
 
     def _abort_on_running_timeout(self):
         # NOTE: this should be called before a batch is launched.

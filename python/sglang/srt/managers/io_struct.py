@@ -2042,6 +2042,17 @@ class GetLoadsReqInput(BaseReq, kw_only=True):
                 )
 
 
+@dataclass
+class WatchLoadUpdateReq(BaseReq):
+    """Forward per-scheduler load metrics to the DataParallelController.
+
+    Carried over gRPC from the request-manager side. Only relevant when
+    dp_size > 1. Single-DP backends receive the message but take no action.
+    """
+
+    loads: list
+
+
 class GetLoadsReqOutput(BaseReq, kw_only=True):
     """Per-DP-rank load metrics for /v1/loads endpoint."""
 
