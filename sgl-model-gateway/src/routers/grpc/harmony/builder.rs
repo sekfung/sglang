@@ -394,12 +394,7 @@ impl HarmonyBuilder {
             let tool_types: Vec<&str> = request
                 .tools
                 .as_ref()
-                .map(|tools| {
-                    tools
-                        .iter()
-                        .map(ResponseTool::as_str)
-                        .collect()
-                })
+                .map(|tools| tools.iter().map(ResponseTool::as_str).collect())
                 .unwrap_or_default();
 
             let with_custom_tools = has_custom_tools(&tool_types);

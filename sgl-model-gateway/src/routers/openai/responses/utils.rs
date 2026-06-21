@@ -3,11 +3,10 @@
 use serde_json::{json, Map, Value};
 use tracing::warn;
 
-use crate::protocols::{
-    event_types::is_response_event,
-    responses::ResponsesRequest,
+use crate::{
+    protocols::{event_types::is_response_event, responses::ResponsesRequest},
+    routers::mcp_utils::response_tool_as_mcp,
 };
-use crate::routers::mcp_utils::response_tool_as_mcp;
 
 /// Check if a JSON value is missing, null, or an empty string
 fn is_missing_or_empty(value: Option<&Value>) -> bool {
@@ -193,7 +192,11 @@ fn insert_optional_string(map: &mut Map<String, Value>, key: &str, value: &Optio
     }
 }
 
-fn insert_optional_json<T: serde::Serialize>(map: &mut Map<String, Value>, key: &str, value: &Option<T>) {
+fn insert_optional_json<T: serde::Serialize>(
+    map: &mut Map<String, Value>,
+    key: &str,
+    value: &Option<T>,
+) {
     if let Some(v) = value {
         if let Ok(value) = serde_json::to_value(v) {
             map.insert(key.to_string(), value);

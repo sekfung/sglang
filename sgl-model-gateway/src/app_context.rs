@@ -512,7 +512,9 @@ impl AppContextBuilder {
     /// Create wasm manager if enabled in config
     fn with_wasm_manager(mut self, config: &RouterConfig) -> Result<Self, String> {
         self.wasm_manager = if config.enable_wasm {
-            Some(Arc::new(WasmModuleManager::new(WasmRuntimeConfig::default())))
+            Some(Arc::new(WasmModuleManager::new(
+                WasmRuntimeConfig::default(),
+            )))
         } else {
             None
         };

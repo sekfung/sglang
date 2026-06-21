@@ -6,16 +6,19 @@ use smg::{
     protocols::{
         common::{GenerationRequest, UsageInfo},
         responses::{
-            CodeInterpreterTool, McpTool, ReasoningEffort, RequireApproval,
-            RequireApprovalMode, ResponseInput, ResponseReasoningParam, ResponseTool,
-            ResponsesRequest, ResponsesToolChoice, ServiceTier, ToolChoiceOptions, Truncation,
-            WebSearchPreviewTool,
+            CodeInterpreterTool, McpTool, ReasoningEffort, RequireApproval, RequireApprovalMode,
+            ResponseInput, ResponseReasoningParam, ResponseTool, ResponsesRequest,
+            ResponsesToolChoice, ServiceTier, ToolChoiceOptions, Truncation, WebSearchPreviewTool,
         },
     },
     routers::{conversations, RouterFactory},
 };
 
-fn mcp_tool(server_url: String, description: Option<String>, require_approval: bool) -> ResponseTool {
+fn mcp_tool(
+    server_url: String,
+    description: Option<String>,
+    require_approval: bool,
+) -> ResponseTool {
     ResponseTool::Mcp(McpTool {
         server_url: Some(server_url),
         authorization: None,

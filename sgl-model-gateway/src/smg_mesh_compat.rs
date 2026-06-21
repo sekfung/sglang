@@ -22,7 +22,6 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
 use smg_mesh::{decode_epoch_count, encode_epoch_count, kv::CrdtNamespace, MergeStrategy};
-
 // Re-export crate-root types that the gateway previously reached through the
 // now-private `service` / `partition` / `metrics` submodules.
 pub use smg_mesh::{
@@ -153,8 +152,7 @@ impl MeshSyncManager {
     }
 
     pub fn remove_worker_state(&self, worker_id: &str) {
-        self.workers
-            .delete(&format!("{WORKER_PREFIX}{worker_id}"));
+        self.workers.delete(&format!("{WORKER_PREFIX}{worker_id}"));
     }
 
     pub fn get_all_worker_states(&self) -> Vec<WorkerState> {

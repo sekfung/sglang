@@ -17,8 +17,6 @@ use rustls::crypto::ring;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use smg_mesh::{MeshServerConfig, MeshServerHandler};
-
-use crate::smg_mesh_compat::MeshSyncManager;
 use tokio::{signal, spawn};
 use tracing::{debug, error, info, warn, Level};
 use wfaas::LoggingSubscriber;
@@ -64,6 +62,7 @@ use crate::{
         tokenize, RouterTrait,
     },
     service_discovery::{start_service_discovery, ServiceDiscoveryConfig},
+    smg_mesh_compat::MeshSyncManager,
     tokenizer::TokenizerRegistry,
     wasm::route::{add_wasm_module, list_wasm_modules, remove_wasm_module},
 };
@@ -733,39 +732,38 @@ pub async fn startup(config: ServerConfig) -> Result<(), Box<dyn std::error::Err
         metrics::start_prometheus(prometheus_config.clone());
     }
 
-    let (mesh_handler, mesh_sync_manager) = if let Some(mesh_server_config) =
-        &config.mesh_server_config
-    {
-        // smg-mesh 1.4.1: state stores and sync manager were folded into the
-        // MeshKV-backed handler. Build the server, then wrap the handler in the
-        // compat MeshSyncManager which reimplements the old high-level state API
-        // on top of the CRDT kv namespaces.
-        use smg_mesh::MeshServerBuilder;
+    let (mesh_handler, mesh_sync_manager) =
+        if let Some(mesh_server_config) = &config.mesh_server_config {
+            // smg-mesh 1.4.1: state stores and sync manager were folded into the
+            // MeshKV-backed handler. Build the server, then wrap the handler in the
+            // compat MeshSyncManager which reimplements the old high-level state API
+            // on top of the CRDT kv namespaces.
+            use smg_mesh::MeshServerBuilder;
 
-        let builder = MeshServerBuilder::new(
-            mesh_server_config.self_name.clone(),
-            mesh_server_config.bind_addr,
-            mesh_server_config.advertise_addr,
-            mesh_server_config.init_peer,
-        );
-        let (mesh_server, handler) = builder.build();
-        let handler = Arc::new(handler);
-        let sync_manager = Arc::new(MeshSyncManager::new(handler.clone()));
+            let builder = MeshServerBuilder::new(
+                mesh_server_config.self_name.clone(),
+                mesh_server_config.bind_addr,
+                mesh_server_config.advertise_addr,
+                mesh_server_config.init_peer,
+            );
+            let (mesh_server, handler) = builder.build();
+            let handler = Arc::new(handler);
+            let sync_manager = Arc::new(MeshSyncManager::new(handler.clone()));
 
-        // Initialize rate-limit membership (no-op under local-only rate limiting)
-        sync_manager.update_rate_limit_membership();
+            // Initialize rate-limit membership (no-op under local-only rate limiting)
+            sync_manager.update_rate_limit_membership();
 
-        // Spawn the mesh gossip server.
-        spawn(async move {
-            if let Err(e) = mesh_server.start().await {
-                tracing::error!("Mesh server failed: {}", e);
-            }
-        });
+            // Spawn the mesh gossip server.
+            spawn(async move {
+                if let Err(e) = mesh_server.start().await {
+                    tracing::error!("Mesh server failed: {}", e);
+                }
+            });
 
-        (Some(handler), Some(sync_manager))
-    } else {
-        (None, None)
-    };
+            (Some(handler), Some(sync_manager))
+        } else {
+            (None, None)
+        };
 
     info!(
         "Starting router on {}:{} | mode: {:?} | policy: {:?} | max_payload: {}MB",

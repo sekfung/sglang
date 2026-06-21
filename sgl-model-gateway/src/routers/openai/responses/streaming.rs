@@ -41,7 +41,9 @@ use crate::{
     },
     routers::{
         header_utils::{apply_request_headers, preserve_response_headers},
-        mcp_utils::{ensure_request_mcp_client, response_tool_as_mcp, response_tool_is_mcp, McpLoopConfig},
+        mcp_utils::{
+            ensure_request_mcp_client, response_tool_as_mcp, response_tool_is_mcp, McpLoopConfig,
+        },
         openai::context::{RequestContext, StreamingEventContext, StreamingRequest},
         persistence_utils::persist_conversation_items,
         streaming_utils::BreakerTrackedStream,
@@ -103,11 +105,7 @@ pub(super) fn apply_event_transformations_inplace(
                     .original_request
                     .tools
                     .as_ref()
-                    .map(|tools| {
-                        tools
-                            .iter()
-                            .any(response_tool_is_mcp)
-                    })
+                    .map(|tools| tools.iter().any(response_tool_is_mcp))
                     .unwrap_or(false);
 
                 if requested_mcp {

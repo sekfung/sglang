@@ -2,7 +2,6 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use dashmap::DashMap;
 use serde_json;
-use crate::smg_mesh_compat::OptionalMeshSyncManager;
 use tracing::{debug, info, warn};
 
 /// Policy Registry for managing model-to-policy mappings
@@ -12,7 +11,7 @@ use tracing::{debug, info, warn};
 /// All subsequent workers of the same model use the established policy.
 /// When the last worker of a model is removed, the policy mapping is cleaned up.
 use super::{BucketPolicy, CacheAwarePolicy, LoadBalancingPolicy, PolicyFactory};
-use crate::{config::types::PolicyConfig, core::Worker};
+use crate::{config::types::PolicyConfig, core::Worker, smg_mesh_compat::OptionalMeshSyncManager};
 
 /// Registry for managing model-to-policy mappings
 #[derive(Clone)]

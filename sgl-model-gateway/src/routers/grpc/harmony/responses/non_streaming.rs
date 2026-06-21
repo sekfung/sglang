@@ -6,7 +6,7 @@ use std::{
 };
 
 use axum::response::Response;
-use serde_json::{json, to_string};
+use serde_json::to_string;
 use tracing::{debug, error, warn};
 
 use super::{
@@ -21,15 +21,16 @@ use crate::{
     protocols::{
         common::{ToolCall, Usage},
         responses::{
-            OutputTokensDetails, ResponseContentPart, ResponseOutputItem, ResponseReasoningContent,
-            ResponseStatus, ResponseUsage, ResponsesRequest, ResponsesResponse, ResponsesUsage,
+            OutputTokensDetails, ResponseContentPart, ResponseOutputItem, ResponseStatus,
+            ResponseUsage, ResponsesRequest, ResponsesResponse, ResponsesUsage,
         },
     },
     routers::{
         error,
         grpc::{
             common::responses::{
-                ensure_mcp_connection, persist_response_if_needed, ResponsesContext,
+                build_reasoning_item, ensure_mcp_connection, persist_response_if_needed,
+                ResponsesContext,
             },
             harmony::processor::ResponsesIterationResult,
         },
@@ -382,17 +383,7 @@ fn build_tool_response(
     // Add reasoning output item if analysis exists
     if let Some(analysis_text) = analysis {
         output.push(
-            serde_json::from_value(json!({
-                "type": "reasoning",
-                "id": format!("reasoning_{}", request_id),
-                "summary": [],
-                "content": [{
-                    "type": "reasoning_text",
-                    "text": analysis_text,
-                }],
-                "status": "completed",
-            }))
-            .expect("valid reasoning output item"),
+            build_reasoning_item(&request_id, &analysis_text).expect("valid reasoning output item"),
         );
     }
 

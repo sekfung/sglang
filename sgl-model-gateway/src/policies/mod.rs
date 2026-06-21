@@ -6,9 +6,11 @@
 use std::{fmt::Debug, sync::Arc};
 
 use async_trait::async_trait;
-use crate::smg_mesh_compat::OptionalMeshSyncManager;
 
-use crate::core::{HashRing, Worker};
+use crate::{
+    core::{HashRing, Worker},
+    smg_mesh_compat::OptionalMeshSyncManager,
+};
 
 mod bucket;
 mod cache_aware;

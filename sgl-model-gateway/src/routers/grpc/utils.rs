@@ -43,8 +43,7 @@ use crate::{
 /// reasoning-parser 1.3.1 dropped built-in pooling (parsers are created fresh
 /// per request). Keep the `Arc<Mutex<Box<dyn ReasoningParser>>>` shape so call
 /// sites that `.lock().await` stay unchanged.
-pub(crate) type ReasoningPooledParser =
-    Arc<tokio::sync::Mutex<Box<dyn ReasoningParser>>>;
+pub(crate) type ReasoningPooledParser = Arc<tokio::sync::Mutex<Box<dyn ReasoningParser>>>;
 
 /// Resolve tokenizer from registry and cache it in request context.
 ///

@@ -396,7 +396,11 @@ async fn test_complete_workflow() {
 
     // 1. Initialize configuration
     let config = McpConfig {
-        servers: vec![streamable_server("integration_test", mock_server.url(), None)],
+        servers: vec![streamable_server(
+            "integration_test",
+            mock_server.url(),
+            None,
+        )],
         ..Default::default()
     };
 

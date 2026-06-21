@@ -83,7 +83,7 @@ pub(super) async fn execute_mcp_tools(
             args,
             tool_call.id.clone(),
         )
-            .await;
+        .await;
         let tool_duration = tool_start.elapsed();
 
         match tool_result {
@@ -197,10 +197,10 @@ pub(crate) fn convert_mcp_tools_to_response_tools(mcp_tools: &[mcp::Tool]) -> Ve
         .map(|tool_info| {
             ResponseTool::Function(FunctionTool {
                 function: Function {
-                name: tool_info.name.to_string(),
-                description: tool_info.description.as_ref().map(|d| d.to_string()),
-                parameters: Value::Object((*tool_info.input_schema).clone()),
-                strict: None,
+                    name: tool_info.name.to_string(),
+                    description: tool_info.description.as_ref().map(|d| d.to_string()),
+                    parameters: Value::Object((*tool_info.input_schema).clone()),
+                    strict: None,
                 },
             })
         })

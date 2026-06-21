@@ -21,7 +21,9 @@ use crate::{
         },
         UNKNOWN_MODEL_ID,
     },
-    routers::grpc::common::responses::utils::extract_tools_from_response_tools,
+    routers::grpc::common::responses::utils::{
+        build_reasoning_item, extract_tools_from_response_tools,
+    },
 };
 
 /// Convert a ResponsesRequest to ChatCompletionRequest for processing through the chat pipeline
@@ -161,7 +163,7 @@ pub(crate) fn responses_to_chat(req: &ResponsesRequest) -> Result<ChatCompletion
     // Only function tools are extracted here (include_mcp: false).
     // MCP tools are merged later by the tool loop (see tool_loop.rs:prepare_chat_tools_and_choice)
     // before the chat pipeline, where tool_choice constraints are applied to ALL tools combined.
-    let function_tools = extract_tools_from_response_tools(req.tools.as_deref(), false);
+    let function_tools = extract_tools_from_response_tools(req.tools.as_deref());
     let tools = if function_tools.is_empty() {
         None
     } else {
@@ -195,7 +197,10 @@ pub(crate) fn responses_to_chat(req: &ResponsesRequest) -> Result<ChatCompletion
         top_p: req.top_p,
         skip_special_tokens: true,
         tools,
-        tool_choice: req.tool_choice.as_ref().map(|choice| choice.to_chat_tool_choice()),
+        tool_choice: req
+            .tool_choice
+            .as_ref()
+            .map(|choice| choice.to_chat_tool_choice()),
         response_format: map_text_to_response_format(&req.text),
         ..Default::default()
     })
@@ -310,17 +315,8 @@ pub(crate) fn chat_to_responses(
     if let Some(reasoning) = &choice.message.reasoning_content {
         if !reasoning.is_empty() {
             output.push(
-                serde_json::from_value(serde_json::json!({
-                    "type": "reasoning",
-                    "id": format!("reasoning_{}", chat_resp.id),
-                    "summary": [],
-                    "content": [{
-                        "type": "reasoning_text",
-                        "text": reasoning,
-                    }],
-                    "status": "completed",
-                }))
-                .expect("valid reasoning output item"),
+                build_reasoning_item(&chat_resp.id, reasoning)
+                    .expect("valid reasoning output item"),
             );
         }
     }

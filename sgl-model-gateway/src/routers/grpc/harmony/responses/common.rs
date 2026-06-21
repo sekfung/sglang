@@ -13,11 +13,15 @@ use crate::{
         common::ToolCall,
         responses::{
             McpToolInfo, ResponseContentPart, ResponseInput, ResponseInputOutputItem,
-            ResponseOutputItem, ResponseReasoningContent, ResponseTool, ResponsesRequest,
-            ResponsesResponse, ResponsesToolChoice, StringOrContentParts, ToolChoiceOptions,
+            ResponseOutputItem, ResponseTool, ResponsesRequest, ResponsesResponse,
+            ResponsesToolChoice, StringOrContentParts, ToolChoiceOptions,
         },
     },
-    routers::{error, grpc::common::responses::ResponsesContext, mcp_utils::response_tool_as_function},
+    routers::{
+        error,
+        grpc::common::responses::{build_reasoning_item, ResponsesContext},
+        mcp_utils::response_tool_as_function,
+    },
 };
 
 /// Record of a single MCP tool call execution
@@ -130,16 +134,14 @@ pub(super) fn build_next_request_with_tools(
 
     // Add reasoning if present (from analysis channel)
     if let Some(analysis_text) = analysis {
-        items.push(from_value(json!({
-            "type": "reasoning",
-            "id": format!("reasoning_{}", assistant_id),
-            "summary": [],
-            "content": [{
-                "type": "reasoning_text",
-                "text": analysis_text,
-            }],
-            "status": "completed",
-        })).map_err(|e| Box::new(error::internal_error("build_reasoning_item_failed", e.to_string())))?);
+        items.push(
+            build_reasoning_item(&assistant_id, &analysis_text).map_err(|e| {
+                Box::new(error::internal_error(
+                    "build_reasoning_item_failed",
+                    e.to_string(),
+                ))
+            })?,
+        );
     }
 
     // Add message content if present (from final channel)
@@ -330,7 +332,10 @@ pub(super) async fn load_previous_messages(
     for stored in chain.responses.iter() {
         history_items.extend(deserialize_items(&stored.input, "input"));
         history_items.extend(deserialize_items(
-            stored.raw_response.get("output").unwrap_or(&Value::Array(vec![])),
+            stored
+                .raw_response
+                .get("output")
+                .unwrap_or(&Value::Array(vec![])),
             "output",
         ));
     }

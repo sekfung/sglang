@@ -41,13 +41,13 @@ use crate::{
         },
         common::{FunctionCallResponse, ToolCall, Usage, UsageInfo},
         responses::{
-            ResponseContentPart, ResponseOutputItem, ResponseReasoningContent, ResponseStatus,
-            ResponsesRequest, ResponsesResponse, ResponsesUsage,
+            ResponseContentPart, ResponseOutputItem, ResponseStatus, ResponsesRequest,
+            ResponsesResponse, ResponsesUsage,
         },
     },
     routers::{
         grpc::common::responses::{
-            build_sse_response, persist_response_if_needed,
+            build_reasoning_item, build_sse_response, persist_response_if_needed,
             streaming::{OutputItemType, ResponseStreamEventEmitter},
             ResponsesContext,
         },
@@ -366,17 +366,8 @@ impl StreamingResponseAccumulator {
         // Add reasoning if present
         if !self.reasoning_buffer.is_empty() {
             output.push(
-                serde_json::from_value(json!({
-                    "type": "reasoning",
-                    "id": format!("reasoning_{}", self.response_id),
-                    "summary": [],
-                    "content": [{
-                        "type": "reasoning_text",
-                        "text": self.reasoning_buffer,
-                    }],
-                    "status": "completed",
-                }))
-                .expect("valid reasoning output item"),
+                build_reasoning_item(&self.response_id, &self.reasoning_buffer)
+                    .expect("valid reasoning output item"),
             );
         }
 
@@ -726,8 +717,8 @@ async fn execute_tool_loop_streaming_internal(
                     tool_call.arguments
                 );
                 let tool_start = Instant::now();
-                let args_value =
-                    serde_json::from_str(tool_call.arguments.as_str()).unwrap_or_else(|_| json!({}));
+                let args_value = serde_json::from_str(tool_call.arguments.as_str())
+                    .unwrap_or_else(|_| json!({}));
                 let (output_str, success, error) = match execute_mcp_tool(
                     &ctx.mcp_manager,
                     tool_call.name.as_str(),

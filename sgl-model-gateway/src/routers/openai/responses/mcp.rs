@@ -154,7 +154,8 @@ pub(super) async fn execute_streaming_tool_calls(
         // Call tool directly - manager handles parsing and type coercion
         debug!("Calling MCP tool '{}' with args: {}", call.name, args_str);
         let args_value = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
-        let call_result = execute_mcp_tool(active_mcp, &call.name, args_value, call.call_id.clone()).await;
+        let call_result =
+            execute_mcp_tool(active_mcp, &call.name, args_value, call.call_id.clone()).await;
         let (output_str, success, error_msg) = match call_result {
             Ok(result) => match serde_json::to_string(&result.output) {
                 Ok(output) => (output, true, None),
@@ -597,7 +598,8 @@ pub(super) async fn execute_tool_loop(
                 "Calling MCP tool '{}' with args: {}",
                 tool_name, args_json_str
             );
-            let args_value = serde_json::from_str(args_json_str.as_str()).unwrap_or_else(|_| json!({}));
+            let args_value =
+                serde_json::from_str(args_json_str.as_str()).unwrap_or_else(|_| json!({}));
             let call_result =
                 execute_mcp_tool(active_mcp, &tool_name, args_value, call_id.clone()).await;
 

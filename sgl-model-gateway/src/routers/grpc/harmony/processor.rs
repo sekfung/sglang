@@ -14,14 +14,14 @@ use crate::{
         chat::{ChatChoice, ChatCompletionMessage, ChatCompletionRequest, ChatCompletionResponse},
         common::{CompletionTokensDetails, ToolCall, Usage},
         responses::{
-            OutputTokensDetails, ResponseContentPart, ResponseOutputItem, ResponseReasoningContent,
-            ResponseStatus, ResponseUsage, ResponsesRequest, ResponsesResponse, ResponsesUsage,
+            OutputTokensDetails, ResponseContentPart, ResponseOutputItem, ResponseStatus,
+            ResponseUsage, ResponsesRequest, ResponsesResponse, ResponsesUsage,
         },
     },
     routers::{
         error,
         grpc::{
-            common::{response_collection, response_formatting},
+            common::{response_collection, response_formatting, responses::build_reasoning_item},
             context::{DispatchMetadata, ExecutionResult},
         },
     },
@@ -297,17 +297,8 @@ impl HarmonyResponseProcessor {
 
         // Map analysis channel → ResponseOutputItem::Reasoning
         if let Some(analysis) = parsed.analysis {
-            let reasoning_item = serde_json::from_value(serde_json::json!({
-                "type": "reasoning",
-                "id": format!("reasoning_{}", dispatch.request_id),
-                "summary": [],
-                "content": [{
-                    "type": "reasoning_text",
-                    "text": analysis,
-                }],
-                "status": "completed",
-            }))
-            .map_err(|e| error::internal_error("build_reasoning_item_failed", e.to_string()))?;
+            let reasoning_item = build_reasoning_item(&dispatch.request_id, &analysis)
+                .map_err(|e| error::internal_error("build_reasoning_item_failed", e.to_string()))?;
             output.push(reasoning_item);
         }
 

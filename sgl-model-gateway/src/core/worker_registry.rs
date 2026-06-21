@@ -14,7 +14,6 @@
 use std::sync::{Arc, RwLock};
 
 use dashmap::DashMap;
-use crate::smg_mesh_compat::OptionalMeshSyncManager;
 use uuid::Uuid;
 
 use crate::{
@@ -24,6 +23,7 @@ use crate::{
         ConnectionMode, Worker,
     },
     observability::metrics::Metrics,
+    smg_mesh_compat::OptionalMeshSyncManager,
 };
 
 /// Number of virtual nodes per physical worker for even distribution.

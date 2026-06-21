@@ -149,8 +149,9 @@ impl HarmonyPreparationStage {
         ctx: &mut RequestContext,
         request: &ResponsesRequest,
     ) -> Result<Option<Response>, Response> {
-        // Step 1: Extract function and MCP tools with schemas from ResponseTools
-        let mut function_tools = extract_tools_from_response_tools(request.tools.as_deref(), true);
+        // Step 1: Extract tool schemas from ResponseTools. Discovered MCP tools
+        // were already rewritten to Function entries upstream, so they're included.
+        let mut function_tools = extract_tools_from_response_tools(request.tools.as_deref());
         let chat_tool_choice = request
             .tool_choice
             .as_ref()

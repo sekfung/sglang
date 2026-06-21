@@ -325,8 +325,8 @@ pub(super) async fn execute_tool_loop(
                 );
 
                 let tool_start = Instant::now();
-                let args_value =
-                    serde_json::from_str(tool_call.arguments.as_str()).unwrap_or_else(|_| json!({}));
+                let args_value = serde_json::from_str(tool_call.arguments.as_str())
+                    .unwrap_or_else(|_| json!({}));
                 let (output_str, success, error) = match execute_mcp_tool(
                     &ctx.mcp_manager,
                     tool_call.name.as_str(),

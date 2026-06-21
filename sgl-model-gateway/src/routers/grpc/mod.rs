@@ -19,6 +19,7 @@ pub(crate) mod utils; // Used by routers/http
 #[derive(Debug)]
 pub(crate) struct ProcessedMessages {
     pub text: String,
+    #[allow(dead_code)]
     pub multimodal_inputs: Option<MultimodalInputs>,
     #[allow(dead_code)]
     pub stop_sequences: Option<StringOrArray>,

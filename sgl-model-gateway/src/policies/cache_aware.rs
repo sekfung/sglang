@@ -64,14 +64,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use rand::Rng;
-use crate::smg_mesh_compat::{tree_ops::TreeOperation, OptionalMeshSyncManager};
 use tracing::{debug, warn};
 
 use super::{
     get_healthy_worker_indices, normalize_model_key, tree::Tree, utils::PeriodicTask,
     CacheAwareConfig, LoadBalancingPolicy, SelectWorkerInfo,
 };
-use crate::core::{Worker, WorkerType, UNKNOWN_MODEL_ID};
+use crate::{
+    core::{Worker, WorkerType, UNKNOWN_MODEL_ID},
+    smg_mesh_compat::{tree_ops::TreeOperation, OptionalMeshSyncManager},
+};
 
 /// Tag used to isolate prefill/decode/regular worker pools in the cache_aware tree key.
 ///
