@@ -1,11 +1,13 @@
 # =============================================================================
 # SGLang + Gateway — 统一 Compose
 # =============================================================================
-# 管理: ./manage.sh <profile> <action>
-#   ./manage.sh 256k up       # 启动 256K worker + gateway
-#   ./manage.sh 128k up       # 启动 128K worker + gateway
-#   ./manage.sh all restart   # 重启 gateway (不重启 worker)
-#   ./manage.sh 256k logs     # 查看 256K 日志
+# 管理: ./manage.sh <action> [profile]
+#   ./manage.sh up 256k       # 启动 256K worker + gateway
+#   ./manage.sh up            # 只启动 gateway
+#   ./manage.sh restart 256k  # 重启 256K + gateway
+#   ./manage.sh restart       # 只重启 gateway
+#   ./manage.sh down 256k     # 停止 256K + gateway
+#   ./manage.sh status        # 全部状态
 #
 # 端口:
 #   8080  Gateway（对外 OpenAI 兼容端点）
