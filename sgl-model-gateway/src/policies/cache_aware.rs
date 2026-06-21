@@ -538,7 +538,17 @@ impl Default for CacheAwarePolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{BasicWorkerBuilder, WorkerType};
+    use crate::{
+        core::{BasicWorkerBuilder, WorkerType},
+        smg_mesh_compat::{MeshServerBuilder, MeshSyncManager},
+    };
+
+    fn test_mesh_sync(node_name: &str) -> Arc<MeshSyncManager> {
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let (_server, handler) =
+            MeshServerBuilder::new(node_name.to_string(), addr, addr, None).build();
+        Arc::new(MeshSyncManager::new(Arc::new(handler)))
+    }
 
     #[tokio::test]
     async fn test_cache_aware_with_balanced_load() {
@@ -704,12 +714,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_aware_sync_tree_operation_to_mesh() {
-        use std::sync::Arc;
-
-        use smg_mesh::{stores::StateStores, sync::MeshSyncManager};
-
-        let stores = Arc::new(StateStores::with_self_name("node1".to_string()));
-        let mesh_sync = Arc::new(MeshSyncManager::new(stores, "node1".to_string()));
+        let mesh_sync = test_mesh_sync("node1");
 
         let config = CacheAwareConfig {
             eviction_interval_secs: 0,
@@ -751,16 +756,9 @@ mod tests {
 
     #[test]
     fn test_cache_aware_restore_tree_state_from_mesh() {
-        use std::sync::Arc;
+        use crate::smg_mesh_compat::tree_ops::{TreeInsertOp, TreeOperation};
 
-        use smg_mesh::{
-            stores::StateStores,
-            sync::MeshSyncManager,
-            crate::smg_mesh_compat::tree_ops::{TreeInsertOp, TreeOperation},
-        };
-
-        let stores = Arc::new(StateStores::with_self_name("node1".to_string()));
-        let mesh_sync = Arc::new(MeshSyncManager::new(stores, "node1".to_string()));
+        let mesh_sync = test_mesh_sync("node1");
 
         // Pre-populate mesh with tree state
         let op1 = TreeOperation::Insert(TreeInsertOp {
@@ -810,16 +808,9 @@ mod tests {
 
     #[test]
     fn test_cache_aware_apply_remote_tree_operation() {
-        use std::sync::Arc;
+        use crate::smg_mesh_compat::tree_ops::{TreeInsertOp, TreeOperation};
 
-        use smg_mesh::{
-            stores::StateStores,
-            sync::MeshSyncManager,
-            crate::smg_mesh_compat::tree_ops::{TreeInsertOp, TreeOperation},
-        };
-
-        let stores = Arc::new(StateStores::with_self_name("node1".to_string()));
-        let mesh_sync = Arc::new(MeshSyncManager::new(stores, "node1".to_string()));
+        let mesh_sync = test_mesh_sync("node1");
 
         let config = CacheAwareConfig {
             eviction_interval_secs: 0,
@@ -843,20 +834,11 @@ mod tests {
 
     #[test]
     fn test_cache_aware_multi_node_consistency() {
-        use std::sync::Arc;
-
-        use smg_mesh::{
-            stores::StateStores,
-            sync::MeshSyncManager,
-            crate::smg_mesh_compat::tree_ops::{TreeInsertOp, TreeOperation},
-        };
+        use crate::smg_mesh_compat::tree_ops::{TreeInsertOp, TreeOperation};
 
         // Simulate two nodes
-        let stores1 = Arc::new(StateStores::with_self_name("node1".to_string()));
-        let mesh_sync1 = Arc::new(MeshSyncManager::new(stores1.clone(), "node1".to_string()));
-
-        let stores2 = Arc::new(StateStores::with_self_name("node2".to_string()));
-        let mesh_sync2 = Arc::new(MeshSyncManager::new(stores2.clone(), "node2".to_string()));
+        let mesh_sync1 = test_mesh_sync("node1");
+        let mesh_sync2 = test_mesh_sync("node2");
 
         let config = CacheAwareConfig {
             eviction_interval_secs: 0,

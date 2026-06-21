@@ -35,7 +35,8 @@ fn test_rerank_request_serialization() {
 fn test_rerank_request_deserialization_with_defaults() {
     let json = r#"{
         "query": "test query",
-        "documents": ["doc1", "doc2"]
+        "documents": ["doc1", "doc2"],
+        "model": "unknown"
     }"#;
 
     let request: RerankRequest = from_str(json).unwrap();

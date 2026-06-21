@@ -759,11 +759,16 @@ mod responses_endpoint_tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let response_id = created_json["id"].as_str().expect("response id missing");
 
         // Retrieve the response
         let req = Request::builder()
             .method("GET")
-            .uri(format!("/v1/responses/{}", resp_id))
+            .uri(format!("/v1/responses/{}", response_id))
             .body(Body::empty())
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
@@ -808,11 +813,16 @@ mod responses_endpoint_tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let response_id = created_json["id"].as_str().expect("response id missing");
 
-        // Cancel the response
+        // Cancel the response through the upstream worker that stored it.
         let req = Request::builder()
             .method("POST")
-            .uri(format!("/v1/responses/{}/cancel", resp_id))
+            .uri(format!("/v1/responses/{}/cancel", response_id))
             .body(Body::empty())
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
@@ -887,9 +897,12 @@ mod responses_endpoint_tests {
             {"id": "item_1", "content": "hello", "role": "user"},
             {"id": "item_2", "content": "hi there", "role": "assistant"}
         ]);
-        stored_response.output = json!([
-            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "test response"}]}
-        ]);
+        stored_response.raw_response = json!({
+            "id": "resp_test_input_items",
+            "output": [
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "test response"}]}
+            ]
+        });
 
         ctx.app_context
             .response_storage
@@ -963,11 +976,16 @@ mod responses_endpoint_tests {
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let response_id = created_json["id"].as_str().expect("response id missing");
 
-        // Using the router, GET should succeed by fanning out across workers
+        // Using the router, GET should succeed from local response storage.
         let req = Request::builder()
             .method("GET")
-            .uri(format!("/v1/responses/{}", rid))
+            .uri(format!("/v1/responses/{}", response_id))
             .body(Body::empty())
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
@@ -982,7 +1000,7 @@ mod responses_endpoint_tests {
             "http://127.0.0.1:18961".to_string(),
         ];
         for url in worker_urls {
-            let get_url = format!("{}/v1/responses/{}", url, rid);
+            let get_url = format!("{}/v1/responses/{}", url, response_id);
             let res = client.get(get_url).send().await.unwrap();
             if res.status() == StatusCode::OK {
                 ok_count += 1;

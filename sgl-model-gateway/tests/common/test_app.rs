@@ -176,14 +176,8 @@ pub async fn create_test_app_context() -> Arc<AppContext> {
 
     // Initialize MCP manager with empty config
     let mcp_manager_lock = Arc::new(OnceLock::new());
-    let empty_config = McpConfig {
-        servers: vec![],
-        pool: Default::default(),
-        proxy: None,
-        warmup: vec![],
-        inventory: Default::default(),
-    };
-    let mcp_manager = McpManager::with_defaults(empty_config)
+    let empty_config = McpConfig::default();
+    let mcp_manager = McpManager::new(empty_config)
         .await
         .expect("Failed to create MCP manager");
     mcp_manager_lock.set(Arc::new(mcp_manager)).ok();

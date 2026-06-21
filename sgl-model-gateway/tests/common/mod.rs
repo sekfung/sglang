@@ -387,14 +387,8 @@ pub async fn create_test_context(config: RouterConfig) -> Arc<AppContext> {
 
     // Initialize MCP manager with empty config
     use smg_mcp::{McpConfig, McpOrchestrator as McpManager};
-    let empty_config = McpConfig {
-        servers: vec![],
-        pool: Default::default(),
-        proxy: None,
-        warmup: vec![],
-        inventory: Default::default(),
-    };
-    let mcp_manager = McpManager::with_defaults(empty_config)
+    let empty_config = McpConfig::default();
+    let mcp_manager = McpManager::new(empty_config)
         .await
         .expect("Failed to create MCP manager");
     app_context
@@ -511,14 +505,8 @@ pub async fn create_test_context_with_parsers(config: RouterConfig) -> Arc<AppCo
 
     // Initialize MCP manager with empty config
     use smg_mcp::{McpConfig, McpOrchestrator as McpManager};
-    let empty_config = McpConfig {
-        servers: vec![],
-        pool: Default::default(),
-        proxy: None,
-        warmup: vec![],
-        inventory: Default::default(),
-    };
-    let mcp_manager = McpManager::with_defaults(empty_config)
+    let empty_config = McpConfig::default();
+    let mcp_manager = McpManager::new(empty_config)
         .await
         .expect("Failed to create MCP manager");
     app_context
@@ -637,7 +625,7 @@ pub async fn create_test_context_with_mcp_config(
     let mcp_config = McpConfig::from_file(mcp_config_path)
         .await
         .expect("Failed to load MCP config from file");
-    let mcp_manager = McpManager::with_defaults(mcp_config)
+    let mcp_manager = McpManager::new(mcp_config)
         .await
         .expect("Failed to create MCP manager");
     app_context

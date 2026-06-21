@@ -30,12 +30,20 @@ struct RateLimitConfig {
 
 /// Write a config value into the mesh CRDT kv namespace (replicates to peers).
 fn mesh_put(handler: &smg_mesh::MeshServerHandler, key: &str, value: Vec<u8>) {
-    handler.mesh_kv().configs().put(key, value);
+    handler.mesh_kv().configs().put(&config_key(key), value);
 }
 
 /// Read a config value from the mesh CRDT kv namespace.
 fn mesh_get(handler: &smg_mesh::MeshServerHandler, key: &str) -> Option<Vec<u8>> {
-    handler.mesh_kv().configs().get(key)
+    handler.mesh_kv().configs().get(&config_key(key))
+}
+
+fn config_key(key: &str) -> String {
+    if key.starts_with("config:") {
+        key.to_string()
+    } else {
+        format!("config:{key}")
+    }
 }
 
 /// Mesh cluster status response

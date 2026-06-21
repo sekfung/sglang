@@ -15,7 +15,7 @@ pub mod responses {
     pub use openai_protocol::responses::*;
     use serde::Deserialize;
 
-    #[derive(Debug, Clone, Deserialize)]
+    #[derive(Debug, Clone, Default, Deserialize)]
     pub struct ResponsesGetParams {
         #[serde(default)]
         pub include: Vec<String>,

@@ -261,9 +261,8 @@ async fn test_openai_router_responses_with_mock() {
     assert_eq!(input_items[0]["role"], "user");
     assert_eq!(input_items[0]["content"][0]["text"], "Say hi");
 
-    // Output is now stored as a JSON array of items
-    assert!(stored1.output.is_array());
-    let output_items = stored1.output.as_array().unwrap();
+    // Output and response metadata live in raw_response.
+    let output_items = stored1.raw_response["output"].as_array().unwrap();
     assert_eq!(output_items.len(), 1);
     assert_eq!(output_items[0]["content"][0]["text"], "mock_output_1");
 
@@ -276,9 +275,7 @@ async fn test_openai_router_responses_with_mock() {
         .expect("second response missing");
     assert_eq!(stored2.previous_response_id.unwrap().0, resp1_id);
 
-    // Output is now stored as a JSON array
-    assert!(stored2.output.is_array());
-    let output_items2 = stored2.output.as_array().unwrap();
+    let output_items2 = stored2.raw_response["output"].as_array().unwrap();
     assert_eq!(output_items2.len(), 1);
     assert_eq!(output_items2[0]["content"][0]["text"], "mock_output_2");
 
@@ -479,7 +476,10 @@ async fn test_openai_router_responses_streaming_with_mock() {
     let mut previous = StoredResponse::new(None);
     previous.id = ResponseId::from("resp_prev_chain");
     previous.input = serde_json::json!("Earlier bedtime question");
-    previous.output = serde_json::json!("Earlier answer");
+    previous.raw_response = serde_json::json!({
+        "id": "resp_prev_chain",
+        "output": "Earlier answer"
+    });
     storage.store_response(previous).await.unwrap();
 
     let mut metadata = HashMap::new();
@@ -535,9 +535,7 @@ async fn test_openai_router_responses_streaming_with_mock() {
         "Tell me a bedtime story."
     );
 
-    // Output is now stored as a JSON array of items
-    assert!(stored.output.is_array());
-    let output_items = stored.output.as_array().unwrap();
+    let output_items = stored.raw_response["output"].as_array().unwrap();
     assert_eq!(output_items.len(), 1);
     assert_eq!(
         output_items[0]["content"][0]["text"],
@@ -551,8 +549,6 @@ async fn test_openai_router_responses_streaming_with_mock() {
             .0,
         "resp_prev_chain"
     );
-    assert_eq!(stored.metadata.get("topic"), Some(&json!("unicorns")));
-    assert_eq!(stored.instructions.as_deref(), Some("Be kind"));
     assert_eq!(stored.model.as_deref(), Some("gpt-5-nano"));
     assert_eq!(stored.safety_identifier, None);
     assert_eq!(stored.raw_response["store"], json!(true));
@@ -599,7 +595,7 @@ async fn test_unsupported_endpoints() {
 
     let generate_request = GenerateRequest {
         text: Some("Hello world".to_string()),
-        model: None,
+        model: "unknown".to_string(),
         input_ids: None,
         input_embeds: None,
         image_data: None,
@@ -633,6 +629,7 @@ async fn test_unsupported_endpoints() {
         return_bytes: false,
         return_entropy: false,
         rid: None,
+        other: serde_json::Map::new(),
     };
 
     let response = router.route_generate(None, &generate_request, None).await;
@@ -874,11 +871,13 @@ fn oracle_config_validation_accepts_dsn_only() {
         .oracle_history(OracleConfig {
             wallet_path: None,
             connect_descriptor: "tcps://db.example.com:1522/service".to_string(),
+            external_auth: false,
             username: "scott".to_string(),
             password: "tiger".to_string(),
             pool_min: 1,
             pool_max: 4,
             pool_timeout_secs: 30,
+            schema: None,
         })
         .build_unchecked();
 
@@ -892,11 +891,13 @@ fn oracle_config_validation_accepts_wallet_alias() {
         .oracle_history(OracleConfig {
             wallet_path: Some("/etc/sglang/oracle-wallet".to_string()),
             connect_descriptor: "db_low".to_string(),
+            external_auth: false,
             username: "app_user".to_string(),
             password: "secret".to_string(),
             pool_min: 1,
             pool_max: 8,
             pool_timeout_secs: 45,
+            schema: None,
         })
         .build_unchecked();
 

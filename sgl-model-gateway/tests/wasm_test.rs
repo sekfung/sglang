@@ -44,9 +44,7 @@ async fn create_test_context_with_wasm() -> Arc<AppContext> {
     let config = RouterConfig::default();
 
     // Initialize WASM manager first
-    let wasm_manager = Arc::new(
-        WasmModuleManager::with_default_config().expect("Failed to create WASM module manager"),
-    );
+    let wasm_manager = Arc::new(WasmModuleManager::with_default_config());
 
     // Create AppContext with wasm_manager from the start
     let client = reqwest::Client::new();
@@ -114,14 +112,8 @@ async fn create_test_context_with_wasm() -> Arc<AppContext> {
 
     // Initialize MCP manager with empty config
     use smg_mcp::{McpConfig, McpOrchestrator as McpManager};
-    let empty_config = McpConfig {
-        servers: vec![],
-        pool: Default::default(),
-        proxy: None,
-        warmup: vec![],
-        inventory: Default::default(),
-    };
-    let mcp_manager = McpManager::with_defaults(empty_config)
+    let empty_config = McpConfig::default();
+    let mcp_manager = McpManager::new(empty_config)
         .await
         .expect("Failed to create MCP manager");
     app_context

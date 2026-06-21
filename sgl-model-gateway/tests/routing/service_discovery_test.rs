@@ -20,6 +20,10 @@ use crate::common::{
 mod service_discovery_tests {
     use super::*;
 
+    fn unused_port() -> u16 {
+        portpicker::pick_unused_port().expect("failed to find an unused test port")
+    }
+
     /// Test service discovery endpoint responds correctly
     #[tokio::test]
     async fn test_service_discovery_endpoint() {
@@ -39,7 +43,7 @@ mod service_discovery_tests {
         let ctx = AppTestContext::new_with_config(
             config,
             vec![MockWorkerConfig {
-                port: 20000,
+                port: unused_port(),
                 worker_type: WorkerType::Regular,
                 health_status: HealthStatus::Healthy,
                 response_delay_ms: 0,
@@ -87,7 +91,7 @@ mod service_discovery_tests {
         let ctx = AppTestContext::new_with_config(
             config,
             vec![MockWorkerConfig {
-                port: 20001,
+                port: unused_port(),
                 worker_type: WorkerType::Regular,
                 health_status: HealthStatus::Healthy,
                 response_delay_ms: 0,
@@ -146,14 +150,14 @@ mod service_discovery_tests {
             config,
             vec![
                 MockWorkerConfig {
-                    port: 20003,
+                    port: unused_port(),
                     worker_type: WorkerType::Regular,
                     health_status: HealthStatus::Healthy,
                     response_delay_ms: 0,
                     fail_rate: 0.0,
                 },
                 MockWorkerConfig {
-                    port: 20004,
+                    port: unused_port(),
                     worker_type: WorkerType::Regular,
                     health_status: HealthStatus::Healthy,
                     response_delay_ms: 0,
@@ -230,7 +234,7 @@ mod service_discovery_tests {
         let ctx = AppTestContext::new_with_config(
             config,
             vec![MockWorkerConfig {
-                port: 20005,
+                port: unused_port(),
                 worker_type: WorkerType::Regular,
                 health_status: HealthStatus::Healthy,
                 response_delay_ms: 0,

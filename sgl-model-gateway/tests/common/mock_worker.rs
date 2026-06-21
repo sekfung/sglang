@@ -1318,8 +1318,18 @@ async fn responses_handler(
             }))
             .into_response()
         } else {
+            let response_id = format!("resp-{}", Uuid::new_v4());
+            let should_store = payload
+                .get("store")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true)
+                || is_background;
+            if should_store {
+                store_response_for_port(config.port, &response_id);
+            }
+
             Json(json!({
-                "id": format!("resp-{}", Uuid::new_v4()),
+                "id": response_id,
                 "object": "response",
                 "created_at": timestamp,
                 "model": "mock-model",
