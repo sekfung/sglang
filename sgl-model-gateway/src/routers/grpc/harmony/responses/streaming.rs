@@ -18,7 +18,7 @@ use super::{
 };
 use crate::{
     observability::metrics::Metrics,
-    protocols::responses::{ResponseToolType, ResponsesRequest},
+    protocols::responses::ResponsesRequest,
     routers::{
         grpc::{
             common::responses::{
@@ -28,7 +28,10 @@ use crate::{
             },
             harmony::{processor::ResponsesIterationResult, streaming::HarmonyStreamingProcessor},
         },
-        mcp_utils::{extract_server_label, DEFAULT_MAX_ITERATIONS},
+        mcp_utils::{
+            extract_server_label, response_tool_as_function, tool_entries_to_tools,
+            DEFAULT_MAX_ITERATIONS,
+        },
     },
 };
 
@@ -133,7 +136,8 @@ async fn execute_mcp_tool_loop_streaming(
     // Add filtered MCP tools (static + requested dynamic) to the request
     let mcp_tools = {
         let servers = ctx.requested_servers.read().unwrap();
-        ctx.mcp_manager.list_tools_for_servers(&servers)
+        let entries = ctx.mcp_manager.list_tools_for_servers(&servers);
+        tool_entries_to_tools(&entries)
     };
     if !mcp_tools.is_empty() {
         let mcp_response_tools = convert_mcp_tools_to_response_tools(&mcp_tools);
@@ -156,8 +160,7 @@ async fn execute_mcp_tool_loop_streaming(
         .map(|tools| {
             tools
                 .iter()
-                .filter(|t| t.r#type == ResponseToolType::Mcp)
-                .filter_map(|t| t.function.as_ref().map(|f| f.name.clone()))
+                .filter_map(|t| response_tool_as_function(t).map(|f| f.name.clone()))
                 .collect()
         })
         .unwrap_or_default();

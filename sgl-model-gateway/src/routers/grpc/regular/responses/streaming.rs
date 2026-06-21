@@ -51,7 +51,9 @@ use crate::{
             streaming::{OutputItemType, ResponseStreamEventEmitter},
             ResponsesContext,
         },
-        mcp_utils::{extract_server_label, DEFAULT_MAX_ITERATIONS},
+        mcp_utils::{
+            execute_mcp_tool, extract_server_label, tool_entries_to_tools, DEFAULT_MAX_ITERATIONS,
+        },
     },
 };
 
@@ -356,19 +358,25 @@ impl StreamingResponseAccumulator {
                     logprobs: None,
                 }],
                 status: "completed".to_string(),
+                phase: None,
             });
         }
 
         // Add reasoning if present
         if !self.reasoning_buffer.is_empty() {
-            output.push(ResponseOutputItem::Reasoning {
-                id: format!("reasoning_{}", self.response_id),
-                summary: vec![],
-                content: vec![ResponseReasoningContent::ReasoningText {
-                    text: self.reasoning_buffer,
-                }],
-                status: Some("completed".to_string()),
-            });
+            output.push(
+                serde_json::from_value(json!({
+                    "type": "reasoning",
+                    "id": format!("reasoning_{}", self.response_id),
+                    "summary": [],
+                    "content": [{
+                        "type": "reasoning_text",
+                        "text": self.reasoning_buffer,
+                    }],
+                    "status": "completed",
+                }))
+                .expect("valid reasoning output item"),
+            );
         }
 
         // Add tool calls
@@ -514,7 +522,8 @@ async fn execute_tool_loop_streaming_internal(
     emitter.send_event(&event, &tx)?;
 
     // Get MCP tools and convert to chat format (do this once before loop)
-    let mcp_tools = ctx.mcp_manager.list_tools();
+    let mcp_tool_entries = ctx.mcp_manager.list_tools(None);
+    let mcp_tools = tool_entries_to_tools(&mcp_tool_entries);
     let mcp_chat_tools = convert_mcp_tools_to_chat_tools(&mcp_tools);
     trace!(
         "Streaming: Converted {} MCP tools to chat format",
@@ -716,12 +725,17 @@ async fn execute_tool_loop_streaming_internal(
                     tool_call.arguments
                 );
                 let tool_start = Instant::now();
-                let (output_str, success, error) = match ctx
-                    .mcp_manager
-                    .call_tool(tool_call.name.as_str(), tool_call.arguments.as_str())
-                    .await
+                let args_value =
+                    serde_json::from_str(tool_call.arguments.as_str()).unwrap_or_else(|_| json!({}));
+                let (output_str, success, error) = match execute_mcp_tool(
+                    &ctx.mcp_manager,
+                    tool_call.name.as_str(),
+                    args_value,
+                    tool_call.call_id.clone(),
+                )
+                .await
                 {
-                    Ok(result) => match serde_json::to_string(&result) {
+                    Ok(result) => match serde_json::to_string(&result.output) {
                         Ok(output) => {
                             // Emit mcp_call.completed
                             let event = emitter.emit_mcp_call_completed(output_index, &item_id);

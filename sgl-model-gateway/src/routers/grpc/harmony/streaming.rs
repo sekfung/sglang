@@ -617,6 +617,7 @@ impl HarmonyStreamingProcessor {
                     prompt_tokens,
                     completion_tokens,
                     total_tokens: prompt_tokens + completion_tokens,
+                    prompt_tokens_details: None,
                     completion_tokens_details: None,
                 })
                 .maybe_system_fingerprint(dispatch.weight_version.as_deref())
@@ -1142,9 +1143,12 @@ impl HarmonyStreamingProcessor {
                         prompt_tokens,
                         completion_tokens,
                         total_tokens: prompt_tokens + completion_tokens,
+                        prompt_tokens_details: None,
                         completion_tokens_details: if reasoning_token_count > 0 {
                             Some(CompletionTokensDetails {
                                 reasoning_tokens: Some(reasoning_token_count),
+                                accepted_prediction_tokens: None,
+                                rejected_prediction_tokens: None,
                             })
                         } else {
                             None
@@ -1181,9 +1185,12 @@ impl HarmonyStreamingProcessor {
                 prompt_tokens,
                 completion_tokens,
                 total_tokens: prompt_tokens + completion_tokens,
+                prompt_tokens_details: None,
                 completion_tokens_details: if reasoning_token_count > 0 {
                     Some(CompletionTokensDetails {
                         reasoning_tokens: Some(reasoning_token_count),
+                        accepted_prediction_tokens: None,
+                        rejected_prediction_tokens: None,
                     })
                 } else {
                     None

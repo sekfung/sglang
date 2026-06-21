@@ -20,10 +20,5 @@ pub(crate) fn build_usage(responses: &[ProtoGenerateComplete]) -> Usage {
     let total_prompt_tokens: u32 = responses.iter().map(|r| r.prompt_tokens() as u32).sum();
     let total_completion_tokens: u32 = responses.iter().map(|r| r.completion_tokens() as u32).sum();
 
-    Usage {
-        prompt_tokens: total_prompt_tokens,
-        completion_tokens: total_completion_tokens,
-        total_tokens: total_prompt_tokens + total_completion_tokens,
-        completion_tokens_details: None,
-    }
+    Usage::from_counts(total_prompt_tokens, total_completion_tokens)
 }

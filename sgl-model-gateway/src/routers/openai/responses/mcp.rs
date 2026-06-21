@@ -24,7 +24,7 @@ use crate::{
     },
     routers::{
         header_utils::apply_request_headers,
-        mcp_utils::{extract_server_label, McpLoopConfig},
+        mcp_utils::{execute_mcp_tool, extract_server_label, McpLoopConfig},
     },
 };
 
@@ -122,7 +122,7 @@ impl FunctionCallInProgress {
 /// Returns false if client disconnected during execution
 pub(super) async fn execute_streaming_tool_calls(
     pending_calls: Vec<FunctionCallInProgress>,
-    active_mcp: &Arc<mcp::McpManager>,
+    active_mcp: &Arc<mcp::McpOrchestrator>,
     tx: &mpsc::UnboundedSender<Result<Bytes, io::Error>>,
     state: &mut ToolLoopState,
     server_label: &str,
@@ -153,9 +153,10 @@ pub(super) async fn execute_streaming_tool_calls(
 
         // Call tool directly - manager handles parsing and type coercion
         debug!("Calling MCP tool '{}' with args: {}", call.name, args_str);
-        let call_result = active_mcp.call_tool(&call.name, args_str).await;
+        let args_value = serde_json::from_str(args_str).unwrap_or_else(|_| json!({}));
+        let call_result = execute_mcp_tool(active_mcp, &call.name, args_value, call.call_id.clone()).await;
         let (output_str, success, error_msg) = match call_result {
-            Ok(result) => match serde_json::to_string(&result) {
+            Ok(result) => match serde_json::to_string(&result.output) {
                 Ok(output) => (output, true, None),
                 Err(e) => {
                     let err = format!("Failed to serialize tool result: {}", e);
@@ -201,7 +202,7 @@ pub(super) async fn execute_streaming_tool_calls(
 /// Transform payload to replace MCP tools with function tools
 pub(super) fn prepare_mcp_tools_as_functions(
     payload: &mut Value,
-    active_mcp: &Arc<mcp::McpManager>,
+    active_mcp: &Arc<mcp::McpOrchestrator>,
     server_keys: &[String],
 ) {
     if let Some(obj) = payload.as_object_mut() {
@@ -221,11 +222,11 @@ pub(super) fn prepare_mcp_tools_as_functions(
         let tools = active_mcp.list_tools_for_servers(server_keys);
         let mut tools_json = Vec::with_capacity(tools.len());
         for t in tools {
-            let parameters = Value::Object((*t.input_schema).clone());
+            let parameters = Value::Object((*t.tool.input_schema).clone());
             let tool = serde_json::json!({
                 "type": ItemType::FUNCTION,
-                "name": t.name,
-                "description": t.description,
+                "name": t.tool.name,
+                "description": t.tool.description,
                 "parameters": parameters
             });
             tools_json.push(tool);
@@ -307,7 +308,7 @@ pub(super) fn build_resume_payload(
 /// Returns false if client disconnected
 pub(super) fn send_mcp_list_tools_events(
     tx: &mpsc::UnboundedSender<Result<Bytes, io::Error>>,
-    mcp: &Arc<mcp::McpManager>,
+    mcp: &Arc<mcp::McpOrchestrator>,
     server_label: &str,
     output_index: usize,
     sequence_number: &mut u64,
@@ -464,7 +465,7 @@ pub(super) fn send_mcp_call_completion_events_with_error(
 pub(super) fn inject_mcp_metadata_streaming(
     response: &mut Value,
     state: &ToolLoopState,
-    mcp: &Arc<mcp::McpManager>,
+    mcp: &Arc<mcp::McpOrchestrator>,
     server_label: &str,
     server_keys: &[String],
 ) {
@@ -505,7 +506,7 @@ pub(super) async fn execute_tool_loop(
     headers: Option<&HeaderMap>,
     initial_payload: Value,
     original_body: &ResponsesRequest,
-    active_mcp: &Arc<mcp::McpManager>,
+    active_mcp: &Arc<mcp::McpOrchestrator>,
     config: &McpLoopConfig,
 ) -> Result<Value, String> {
     let mut state = ToolLoopState::new(original_body.input.clone());
@@ -596,12 +597,12 @@ pub(super) async fn execute_tool_loop(
                 "Calling MCP tool '{}' with args: {}",
                 tool_name, args_json_str
             );
-            let call_result = active_mcp
-                .call_tool(&tool_name, args_json_str.as_str())
-                .await;
+            let args_value = serde_json::from_str(args_json_str.as_str()).unwrap_or_else(|_| json!({}));
+            let call_result =
+                execute_mcp_tool(active_mcp, &tool_name, args_value, call_id.clone()).await;
 
             let output_str = match call_result {
-                Ok(result) => match serde_json::to_string(&result) {
+                Ok(result) => match serde_json::to_string(&result.output) {
                     Ok(output) => output,
                     Err(e) => {
                         warn!("Failed to serialize tool result: {}", e);
@@ -671,7 +672,7 @@ pub(super) fn build_incomplete_response(
     mut response: Value,
     state: ToolLoopState,
     reason: &str,
-    active_mcp: &Arc<mcp::McpManager>,
+    active_mcp: &Arc<mcp::McpOrchestrator>,
     original_body: &ResponsesRequest,
     server_keys: &[String],
 ) -> Result<Value, String> {
@@ -765,7 +766,7 @@ pub(super) fn build_incomplete_response(
 
 /// Build a mcp_list_tools output item
 pub(super) fn build_mcp_list_tools_item(
-    mcp: &Arc<mcp::McpManager>,
+    mcp: &Arc<mcp::McpOrchestrator>,
     server_label: &str,
     server_keys: &[String],
 ) -> Value {
@@ -774,9 +775,9 @@ pub(super) fn build_mcp_list_tools_item(
         .iter()
         .map(|t| {
             json!({
-                "name": t.name,
-                "description": t.description,
-                "input_schema": Value::Object((*t.input_schema).clone()),
+                "name": t.tool.name,
+                "description": t.tool.description,
+                "input_schema": Value::Object((*t.tool.input_schema).clone()),
                 "annotations": {
                     "read_only": false
                 }

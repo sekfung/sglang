@@ -572,6 +572,7 @@ impl StreamingProcessor {
                         prompt_tokens: total_prompt,
                         completion_tokens: total_completion,
                         total_tokens: total_prompt + total_completion,
+                        prompt_tokens_details: None,
                         completion_tokens_details: None,
                     })
                     .maybe_system_fingerprint(system_fingerprint)

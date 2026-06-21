@@ -11,7 +11,7 @@ use std::sync::Arc;
 use axum::response::Response;
 use data_connector::{self, ConversationId, ResponseId};
 use serde_json::{json, Value};
-use smg_mcp::{self as mcp, McpManager};
+use smg_mcp::{self as mcp, McpOrchestrator as McpManager};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
@@ -186,9 +186,9 @@ pub(super) fn build_mcp_list_tools_item(
     let tools_info: Vec<McpToolInfo> = tools
         .iter()
         .map(|t| McpToolInfo {
-            name: t.name.to_string(),
-            description: t.description.as_ref().map(|d| d.to_string()),
-            input_schema: Value::Object((*t.input_schema).clone()),
+            name: t.tool.name.to_string(),
+            description: t.tool.description.as_ref().map(|d| d.to_string()),
+            input_schema: Value::Object((*t.tool.input_schema).clone()),
             annotations: Some(json!({
                 "read_only": false
             })),
@@ -199,6 +199,7 @@ pub(super) fn build_mcp_list_tools_item(
         id: generate_mcp_id("mcpl"),
         server_label: server_label.to_string(),
         tools: tools_info,
+        error: None,
     }
 }
 
@@ -264,7 +265,9 @@ pub(super) async fn load_conversation_history(
                     }
 
                     // Convert output items from stored output (which is now a JSON array)
-                    if let Some(output_arr) = stored.output.as_array() {
+                    if let Some(output_arr) =
+                        stored.raw_response.get("output").and_then(|v| v.as_array())
+                    {
                         for item in output_arr {
                             match serde_json::from_value::<ResponseInputOutputItem>(item.clone()) {
                                 Ok(output_item) => {
@@ -294,7 +297,7 @@ pub(super) async fn load_conversation_history(
 
     // Handle conversation by loading conversation history
     if let Some(ref conv_id_str) = request.conversation {
-        let conv_id = ConversationId::from(conv_id_str.as_str());
+        let conv_id = ConversationId::from(conv_id_str.as_id());
 
         // Check if conversation exists - return error if not found
         let conversation = ctx
@@ -313,7 +316,7 @@ pub(super) async fn load_conversation_history(
                 "conversation_not_found",
                 format!(
                     "Conversation '{}' not found. Please create the conversation first using the conversations API.",
-                    conv_id_str
+                    conv_id_str.as_id()
                 )
             ));
         }
@@ -343,6 +346,7 @@ pub(super) async fn load_conversation_history(
                                 role: item.role.clone().unwrap_or_else(|| "user".to_string()),
                                 content: content_parts,
                                 status: item.status.clone(),
+                                phase: None,
                             });
                         }
                     }
@@ -356,6 +360,7 @@ pub(super) async fn load_conversation_history(
                             role: "user".to_string(),
                             content: vec![ResponseContentPart::InputText { text: text.clone() }],
                             status: Some("completed".to_string()),
+                            phase: None,
                         });
                     }
                     ResponseInput::Items(current_items) => {
@@ -391,6 +396,7 @@ pub(super) async fn load_conversation_history(
                     role: "user".to_string(),
                     content: vec![ResponseContentPart::InputText { text: text.clone() }],
                     status: Some("completed".to_string()),
+                    phase: None,
                 });
             }
             ResponseInput::Items(current_items) => {
@@ -426,6 +432,7 @@ pub(super) fn build_next_request(
             role: "user".to_string(),
             content: vec![ResponseContentPart::InputText { text: text.clone() }],
             status: Some("completed".to_string()),
+            phase: None,
         }],
         ResponseInput::Items(items) => items.iter().map(responses::normalize_input_item).collect(),
     };
@@ -436,35 +443,9 @@ pub(super) fn build_next_request(
     // Build new request for next iteration
     ResponsesRequest {
         input: ResponseInput::Items(input_items),
-        model: current_request.model.clone(),
-        instructions: current_request.instructions.clone(),
-        tools: current_request.tools.clone(),
-        max_output_tokens: current_request.max_output_tokens,
-        temperature: current_request.temperature,
-        top_p: current_request.top_p,
-        stream: current_request.stream,
         store: Some(false), // Don't store intermediate responses
-        background: Some(false),
-        max_tool_calls: current_request.max_tool_calls,
-        tool_choice: current_request.tool_choice.clone(),
-        parallel_tool_calls: current_request.parallel_tool_calls,
         previous_response_id: None,
         conversation: None,
-        user: current_request.user.clone(),
-        metadata: current_request.metadata.clone(),
-        include: current_request.include.clone(),
-        reasoning: current_request.reasoning.clone(),
-        service_tier: current_request.service_tier.clone(),
-        top_logprobs: current_request.top_logprobs,
-        truncation: current_request.truncation.clone(),
-        text: current_request.text.clone(),
-        request_id: None,
-        priority: current_request.priority,
-        frequency_penalty: current_request.frequency_penalty,
-        presence_penalty: current_request.presence_penalty,
-        stop: current_request.stop.clone(),
-        top_k: current_request.top_k,
-        min_p: current_request.min_p,
-        repetition_penalty: current_request.repetition_penalty,
+        ..current_request.clone()
     }
 }

@@ -33,7 +33,7 @@ use crate::{
             },
             harmony::processor::ResponsesIterationResult,
         },
-        mcp_utils::{extract_server_label, DEFAULT_MAX_ITERATIONS},
+        mcp_utils::{extract_server_label, tool_entries_to_tools, DEFAULT_MAX_ITERATIONS},
     },
 };
 
@@ -106,7 +106,8 @@ async fn execute_with_mcp_loop(
     // Add filtered MCP tools (static + requested dynamic) to the request
     let mcp_tools = {
         let servers = ctx.requested_servers.read().unwrap();
-        ctx.mcp_manager.list_tools_for_servers(&servers)
+        let entries = ctx.mcp_manager.list_tools_for_servers(&servers);
+        tool_entries_to_tools(&entries)
     };
     if !mcp_tools.is_empty() {
         let mcp_response_tools = convert_mcp_tools_to_response_tools(&mcp_tools);
@@ -222,7 +223,7 @@ async fn execute_with_mcp_loop(
 
                     // Mark as completed with incomplete_details
                     response.status = ResponseStatus::Completed;
-                    response.incomplete_details = Some(json!({ "reason": "max_tool_calls" }));
+                    response.incomplete_details = None;
 
                     // Inject MCP metadata if any calls were executed
                     if mcp_tracking.total_calls() > 0 {
@@ -380,14 +381,19 @@ fn build_tool_response(
 
     // Add reasoning output item if analysis exists
     if let Some(analysis_text) = analysis {
-        output.push(ResponseOutputItem::Reasoning {
-            id: format!("reasoning_{}", request_id),
-            summary: vec![],
-            content: vec![ResponseReasoningContent::ReasoningText {
-                text: analysis_text,
-            }],
-            status: Some("completed".to_string()),
-        });
+        output.push(
+            serde_json::from_value(json!({
+                "type": "reasoning",
+                "id": format!("reasoning_{}", request_id),
+                "summary": [],
+                "content": [{
+                    "type": "reasoning_text",
+                    "text": analysis_text,
+                }],
+                "status": "completed",
+            }))
+            .expect("valid reasoning output item"),
+        );
     }
 
     // Add message output item if partial text exists
@@ -401,6 +407,7 @@ fn build_tool_response(
                 logprobs: None,
             }],
             status: "completed".to_string(),
+            phase: None,
         });
     }
 

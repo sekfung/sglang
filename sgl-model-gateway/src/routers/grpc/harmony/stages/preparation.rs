@@ -151,18 +151,22 @@ impl HarmonyPreparationStage {
     ) -> Result<Option<Response>, Response> {
         // Step 1: Extract function and MCP tools with schemas from ResponseTools
         let mut function_tools = extract_tools_from_response_tools(request.tools.as_deref(), true);
+        let chat_tool_choice = request
+            .tool_choice
+            .as_ref()
+            .map(|choice| choice.to_chat_tool_choice());
 
         // Step 2: Filter tools based on tool_choice (AllowedTools or Function)
         // Note: Tool existence is already validated in ResponsesRequest::validate()
         if let Some(filtered) =
-            utils::filter_tools_by_tool_choice(&function_tools, &request.tool_choice)
+            utils::filter_tools_by_tool_choice(&function_tools, &chat_tool_choice)
         {
             function_tools = filtered;
         }
 
         // Step 3: Generate Harmony structural tags
         let tool_constraint = if !function_tools.is_empty() {
-            Self::generate_tool_call_constraint(&function_tools, &request.tool_choice)
+            Self::generate_tool_call_constraint(&function_tools, &chat_tool_choice)
                 .map_err(|e| *e)?
         } else {
             None

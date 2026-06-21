@@ -139,7 +139,6 @@ impl PipelineStage for HarmonyRequestBuildingStage {
                     request.as_ref(),
                     placeholder_processed_text,
                     prep.token_ids.clone(),
-                    prep.harmony_stop_ids.clone(),
                     prep.tool_constraints.clone(),
                 )
                 .map_err(|e| {

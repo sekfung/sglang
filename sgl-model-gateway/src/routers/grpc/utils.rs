@@ -24,7 +24,7 @@ use crate::{
             ChatLogProbs, ChatLogProbsContent, FunctionCallResponse, StringOrArray, Tool, ToolCall,
             ToolChoice, ToolChoiceValue, TopLogProb,
         },
-        generate::GenerateFinishReason,
+        generate::{GenerateFinishReason, GenerateFinishType},
     },
     reasoning_parser::{
         ParserFactory as ReasoningParserFactory, PooledParser as ReasoningPooledParser,
@@ -996,11 +996,14 @@ pub(crate) fn parse_finish_reason(
     completion_tokens: i32,
 ) -> GenerateFinishReason {
     if reason_str == "stop" {
-        return GenerateFinishReason::Stop;
+        return GenerateFinishReason::Stop {
+            finish_type: GenerateFinishType::Stop,
+        };
     }
 
     if reason_str == "length" {
         return GenerateFinishReason::Length {
+            finish_type: GenerateFinishType::Length,
             length: completion_tokens.max(0) as u32,
         };
     }

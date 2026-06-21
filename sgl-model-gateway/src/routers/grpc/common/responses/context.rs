@@ -5,7 +5,7 @@
 use std::sync::{Arc, RwLock as StdRwLock};
 
 use data_connector::{ConversationItemStorage, ConversationStorage, ResponseStorage};
-use smg_mcp::McpManager;
+use smg_mcp::McpOrchestrator as McpManager;
 
 use crate::routers::grpc::{context::SharedComponents, pipeline::RequestPipeline};
 

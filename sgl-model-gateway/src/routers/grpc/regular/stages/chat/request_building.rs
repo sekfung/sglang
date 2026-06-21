@@ -71,11 +71,7 @@ impl PipelineStage for ChatRequestBuildingStage {
                         body_ref,
                         prep.processed_messages.as_ref().unwrap().text.clone(),
                         prep.token_ids.clone(),
-                        prep.processed_messages
-                            .as_ref()
-                            .unwrap()
-                            .multimodal_inputs
-                            .clone(),
+                        None,
                         prep.tool_constraints.clone(),
                     )
                     .map_err(|e| {
@@ -91,6 +87,7 @@ impl PipelineStage for ChatRequestBuildingStage {
                         body_ref,
                         prep.processed_messages.as_ref().unwrap().text.clone(),
                         prep.token_ids.clone(),
+                        None,
                         prep.tool_constraints.clone(),
                     )
                     .map_err(|e| {

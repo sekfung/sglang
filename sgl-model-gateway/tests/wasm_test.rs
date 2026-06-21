@@ -113,7 +113,7 @@ async fn create_test_context_with_wasm() -> Arc<AppContext> {
         .expect("WorkflowEngines should only be initialized once");
 
     // Initialize MCP manager with empty config
-    use smg_mcp::{McpConfig, McpManager};
+    use smg_mcp::{McpConfig, McpOrchestrator as McpManager};
     let empty_config = McpConfig {
         servers: vec![],
         pool: Default::default(),

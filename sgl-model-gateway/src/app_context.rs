@@ -8,7 +8,7 @@ use data_connector::{
     StorageFactoryConfig,
 };
 use reqwest::Client;
-use smg_mcp::McpManager;
+use smg_mcp::McpOrchestrator as McpManager;
 use tracing::debug;
 
 use crate::{
@@ -298,7 +298,8 @@ impl AppContextBuilder {
             .with_tool_parser_factory()
             .with_worker_registry()
             .with_policy_registry(&router_config)
-            .with_storage(&router_config)?
+            .with_storage(&router_config)
+            .await?
             .with_load_monitor(&router_config)
             .with_worker_job_queue()
             .with_workflow_engines()
@@ -429,19 +430,19 @@ impl AppContextBuilder {
     }
 
     /// Create all storage backends using the factory function
-    fn with_storage(mut self, config: &RouterConfig) -> Result<Self, String> {
+    async fn with_storage(mut self, config: &RouterConfig) -> Result<Self, String> {
         let storage_config = StorageFactoryConfig {
             backend: &config.history_backend,
             oracle: config.oracle.as_ref(),
             postgres: config.postgres.as_ref(),
             redis: config.redis.as_ref(),
+            hook: None,
         };
-        let (response_storage, conversation_storage, conversation_item_storage) =
-            create_storage(storage_config)?;
+        let storage = create_storage(storage_config).await?;
 
-        self.response_storage = Some(response_storage);
-        self.conversation_storage = Some(conversation_storage);
-        self.conversation_item_storage = Some(conversation_item_storage);
+        self.response_storage = Some(storage.response_storage);
+        self.conversation_storage = Some(storage.conversation_storage);
+        self.conversation_item_storage = Some(storage.conversation_item_storage);
 
         Ok(self)
     }
@@ -492,13 +493,10 @@ impl AppContextBuilder {
 
         let empty_config = smg_mcp::McpConfig {
             servers: Vec::new(),
-            pool: Default::default(),
-            proxy: None,
-            warmup: Vec::new(),
-            inventory: Default::default(),
+            ..Default::default()
         };
 
-        let manager = McpManager::with_defaults(empty_config)
+        let manager = McpManager::new(empty_config)
             .await
             .map_err(|e| format!("Failed to initialize MCP manager with defaults: {}", e))?;
 
@@ -514,10 +512,7 @@ impl AppContextBuilder {
     /// Create wasm manager if enabled in config
     fn with_wasm_manager(mut self, config: &RouterConfig) -> Result<Self, String> {
         self.wasm_manager = if config.enable_wasm {
-            Some(Arc::new(
-                WasmModuleManager::new(WasmRuntimeConfig::default())
-                    .map_err(|e| format!("Failed to initialize WASM module manager: {}", e))?,
-            ))
+            Some(Arc::new(WasmModuleManager::new(WasmRuntimeConfig::default())))
         } else {
             None
         };

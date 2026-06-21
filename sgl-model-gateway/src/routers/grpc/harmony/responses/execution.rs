@@ -3,8 +3,8 @@
 use std::{sync::Arc, time::Instant};
 
 use axum::response::Response;
-use serde_json::{from_str, json, to_string, to_value, Value};
-use smg_mcp::{self as mcp, McpManager};
+use serde_json::{from_str, json, to_string, Value};
+use smg_mcp::{self as mcp, McpOrchestrator as McpManager};
 use tracing::{debug, error, warn};
 
 use super::common::McpCallTracking;
@@ -12,9 +12,9 @@ use crate::{
     observability::metrics::{metrics_labels, Metrics},
     protocols::{
         common::{Function, ToolCall},
-        responses::{ResponseTool, ResponseToolType},
+        responses::{FunctionTool, ResponseTool},
     },
-    routers::error,
+    routers::{error, mcp_utils::execute_mcp_tool},
 };
 
 /// Tool execution result
@@ -76,16 +76,13 @@ pub(super) async fn execute_mcp_tools(
             )
         })?;
 
-        // Execute tool via MCP manager
-        let args_map = if let Value::Object(map) = args {
-            Some(map)
-        } else {
-            None
-        };
-
         let tool_start = Instant::now();
-        let tool_result = mcp_manager
-            .call_tool(&tool_call.function.name, args_map)
+        let tool_result = execute_mcp_tool(
+            mcp_manager,
+            &tool_call.function.name,
+            args,
+            tool_call.id.clone(),
+        )
             .await;
         let tool_duration = tool_start.elapsed();
 
@@ -97,16 +94,8 @@ pub(super) async fn execute_mcp_tools(
                     "Tool execution succeeded"
                 );
 
-                // Extract content from MCP result
-                let output = if let Some(content) = mcp_result.content.first() {
-                    // Serialize the entire content item
-                    to_value(content)
-                        .unwrap_or_else(|_| json!({"error": "Failed to serialize tool result"}))
-                } else {
-                    json!({"result": "success"})
-                };
-
-                let is_error = mcp_result.is_error.unwrap_or(false);
+                let output = mcp_result.output;
+                let is_error = mcp_result.is_error;
                 let output_str = to_string(&output)
                     .unwrap_or_else(|_| r#"{"error": "Failed to serialize output"}"#.to_string());
 
@@ -205,20 +194,15 @@ pub(super) async fn execute_mcp_tools(
 pub(crate) fn convert_mcp_tools_to_response_tools(mcp_tools: &[mcp::Tool]) -> Vec<ResponseTool> {
     mcp_tools
         .iter()
-        .map(|tool_info| ResponseTool {
-            r#type: ResponseToolType::Mcp,
-            function: Some(Function {
+        .map(|tool_info| {
+            ResponseTool::Function(FunctionTool {
+                function: Function {
                 name: tool_info.name.to_string(),
                 description: tool_info.description.as_ref().map(|d| d.to_string()),
                 parameters: Value::Object((*tool_info.input_schema).clone()),
                 strict: None,
-            }),
-            server_url: None, // MCP tools from inventory don't have individual server URLs
-            authorization: None,
-            server_label: None,
-            server_description: tool_info.description.as_ref().map(|d| d.to_string()),
-            require_approval: None,
-            allowed_tools: None,
+                },
+            })
         })
         .collect()
 }

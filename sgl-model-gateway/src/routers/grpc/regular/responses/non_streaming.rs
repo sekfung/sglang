@@ -27,7 +27,9 @@ use crate::{
         grpc::common::responses::{
             ensure_mcp_connection, persist_response_if_needed, ResponsesContext,
         },
-        mcp_utils::{extract_server_label, DEFAULT_MAX_ITERATIONS},
+        mcp_utils::{
+            execute_mcp_tool, extract_server_label, tool_entries_to_tools, DEFAULT_MAX_ITERATIONS,
+        },
     },
 };
 
@@ -177,7 +179,8 @@ pub(super) async fn execute_tool_loop(
     // Get MCP tools and convert to chat format (do this once before loop)
     let mcp_tools = {
         let servers = ctx.requested_servers.read().unwrap();
-        ctx.mcp_manager.list_tools_for_servers(&servers)
+        let entries = ctx.mcp_manager.list_tools_for_servers(&servers);
+        tool_entries_to_tools(&entries)
     };
     let mcp_chat_tools = convert_mcp_tools_to_chat_tools(&mcp_tools);
     trace!(
@@ -307,7 +310,7 @@ pub(super) async fn execute_tool_loop(
 
                 // Mark as completed but with incomplete details
                 responses_response.status = ResponseStatus::Completed;
-                responses_response.incomplete_details = Some(json!({ "reason": "max_tool_calls" }));
+                responses_response.incomplete_details = None;
 
                 return Ok(responses_response);
             }
@@ -322,12 +325,17 @@ pub(super) async fn execute_tool_loop(
                 );
 
                 let tool_start = Instant::now();
-                let (output_str, success, error) = match ctx
-                    .mcp_manager
-                    .call_tool(tool_call.name.as_str(), tool_call.arguments.as_str())
-                    .await
+                let args_value =
+                    serde_json::from_str(tool_call.arguments.as_str()).unwrap_or_else(|_| json!({}));
+                let (output_str, success, error) = match execute_mcp_tool(
+                    &ctx.mcp_manager,
+                    tool_call.name.as_str(),
+                    args_value,
+                    tool_call.call_id.clone(),
+                )
+                .await
                 {
-                    Ok(result) => match serde_json::to_string(&result) {
+                    Ok(result) => match serde_json::to_string(&result.output) {
                         Ok(output) => (output, true, None),
                         Err(e) => {
                             let err = format!("Failed to serialize tool result: {}", e);

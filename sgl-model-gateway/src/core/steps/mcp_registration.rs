@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use smg_mcp::{config::McpServerConfig, manager::McpManager};
+use smg_mcp::McpServerConfig;
 use tracing::{debug, error, info, warn};
 use wfaas::{
     BackoffStrategy, FailureAction, RetryPolicy, StepDefinition, StepExecutor, StepId, StepResult,
@@ -49,15 +49,17 @@ impl StepExecutor<McpWorkflowData> for ConnectMcpServerStep {
 
         debug!("Connecting to MCP server: {}", config_request.name);
 
-        // Get proxy config from router_config if available, otherwise fall back to env
-        let proxy_config = app_context
-            .router_config
-            .mcp_config
-            .as_ref()
-            .and_then(|cfg| cfg.proxy.as_ref());
+        let mcp_manager =
+            app_context
+                .mcp_manager
+                .get()
+                .ok_or_else(|| WorkflowError::StepFailed {
+                    step_id: StepId::new("connect_mcp_server"),
+                    message: "MCP manager not initialized".to_string(),
+                })?;
 
-        // Connect to MCP server
-        let client = McpManager::connect_server(&config_request.config, proxy_config)
+        mcp_manager
+            .connect_static_server(&config_request.config)
             .await
             .map_err(|e| WorkflowError::StepFailed {
                 step_id: StepId::new("connect_mcp_server"),
@@ -71,9 +73,6 @@ impl StepExecutor<McpWorkflowData> for ConnectMcpServerStep {
             "Successfully connected to MCP server: {}",
             config_request.name
         );
-
-        // Store client in typed data
-        context.data.mcp_client = Some(Arc::new(client));
 
         Ok(StepResult::Success)
     }
@@ -103,12 +102,6 @@ impl StepExecutor<McpWorkflowData> for DiscoverMcpInventoryStep {
             .app_context
             .as_ref()
             .ok_or_else(|| WorkflowError::ContextValueNotFound("app_context".to_string()))?;
-        let mcp_client = context
-            .data
-            .mcp_client
-            .as_ref()
-            .ok_or_else(|| WorkflowError::ContextValueNotFound("mcp_client".to_string()))?;
-
         debug!(
             "Discovering inventory for MCP server: {}",
             config_request.name
@@ -124,10 +117,15 @@ impl StepExecutor<McpWorkflowData> for DiscoverMcpInventoryStep {
                     message: "MCP manager not initialized".to_string(),
                 })?;
 
-        let inventory = mcp_manager.inventory();
-
-        // Use the public load_server_inventory method
-        McpManager::load_server_inventory(&inventory, &config_request.name, mcp_client).await;
+        if !mcp_manager.list_servers().contains(&config_request.name) {
+            return Err(WorkflowError::StepFailed {
+                step_id: StepId::new("discover_mcp_inventory"),
+                message: format!(
+                    "MCP server '{}' is not connected; inventory was not loaded",
+                    config_request.name
+                ),
+            });
+        }
 
         info!("Completed inventory discovery for {}", config_request.name);
 
@@ -157,13 +155,6 @@ impl StepExecutor<McpWorkflowData> for RegisterMcpServerStep {
             .app_context
             .as_ref()
             .ok_or_else(|| WorkflowError::ContextValueNotFound("app_context".to_string()))?;
-        let mcp_client = context
-            .data
-            .mcp_client
-            .as_ref()
-            .ok_or_else(|| WorkflowError::ContextValueNotFound("mcp_client".to_string()))?
-            .clone();
-
         debug!("Registering MCP server: {}", config_request.name);
 
         // Get MCP manager from app context
@@ -175,9 +166,6 @@ impl StepExecutor<McpWorkflowData> for RegisterMcpServerStep {
                     step_id: StepId::new("register_mcp_server"),
                     message: "MCP manager not initialized".to_string(),
                 })?;
-
-        // Register the client in the manager's client map
-        mcp_manager.register_static_server(config_request.name.clone(), mcp_client);
 
         // Update active MCP servers metric
         Metrics::set_mcp_servers_active(mcp_manager.list_servers().len());
@@ -207,7 +195,12 @@ impl StepExecutor<McpWorkflowData> for ValidateRegistrationStep {
         context: &mut WorkflowContext<McpWorkflowData>,
     ) -> WorkflowResult<StepResult> {
         let config_request = &context.data.config;
-        let client_registered = context.data.mcp_client.is_some();
+        let client_registered = context
+            .data
+            .app_context
+            .as_ref()
+            .and_then(|app_context| app_context.mcp_manager.get())
+            .is_some_and(|mcp_manager| mcp_manager.list_servers().contains(&config_request.name));
 
         if client_registered {
             info!(

@@ -353,6 +353,7 @@ impl OpenAIRouter {
                     role: "user".to_string(),
                     content: vec![ResponseContentPart::InputText { text: text.clone() }],
                     status: Some("completed".to_string()),
+                    phase: None,
                 });
             }
             ResponseInput::Items(current_items) => {
@@ -757,7 +758,12 @@ impl crate::routers::RouterTrait for OpenAIRouter {
                         .flat_map(|stored| {
                             Self::deserialize_items_from_array(&stored.input)
                                 .into_iter()
-                                .chain(Self::deserialize_items_from_array(&stored.output))
+                                .chain(Self::deserialize_items_from_array(
+                                    stored
+                                        .raw_response
+                                        .get("output")
+                                        .unwrap_or(&Value::Array(vec![])),
+                                ))
                         })
                         .collect();
                     conversation_items = Some(items);
@@ -772,7 +778,7 @@ impl crate::routers::RouterTrait for OpenAIRouter {
         }
 
         if let Some(conv_id_str) = body.conversation.clone() {
-            let conv_id = ConversationId::from(conv_id_str.as_str());
+            let conv_id = ConversationId::from(conv_id_str.as_id());
 
             if let Ok(None) = self
                 .responses_components
@@ -820,6 +826,7 @@ impl crate::routers::RouterTrait for OpenAIRouter {
                                                 .unwrap_or_else(|| "user".to_string()),
                                             content: content_parts,
                                             status: item.status.clone(),
+                                            phase: None,
                                         });
                                     }
                                     Err(e) => {

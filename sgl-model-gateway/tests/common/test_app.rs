@@ -17,7 +17,7 @@ use smg::{
     server::{build_app, AppState},
     tokenizer::registry::TokenizerRegistry,
 };
-use smg_mcp::{McpConfig, McpManager};
+use smg_mcp::{McpConfig, McpOrchestrator as McpManager};
 
 /// Create a test Axum application using the actual server's build_app function
 #[allow(dead_code)]

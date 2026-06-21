@@ -125,11 +125,6 @@ pub async fn create_and_link_item(
 // Response Persistence
 // ============================================================================
 
-/// Extract a string field from JSON, returning owned String
-fn get_string(json: &Value, key: &str) -> Option<String> {
-    json.get(key).and_then(|v| v.as_str()).map(String::from)
-}
-
 /// Build a StoredResponse from response JSON and original request
 pub fn build_stored_response(
     response_json: &Value,
@@ -137,26 +132,23 @@ pub fn build_stored_response(
 ) -> StoredResponse {
     let mut stored = StoredResponse::new(None);
 
-    // Initialize empty arrays - will be populated by persist_conversation_items
+    // Initialize input array; output and other response metadata live in raw_response.
     stored.input = Value::Array(vec![]);
-    stored.output = Value::Array(vec![]);
+    stored.raw_response = response_json.clone();
+    stored.model = response_json
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .or_else(|| Some(original_body.model.clone()));
+    stored.conversation_id = original_body
+        .conversation
+        .as_ref()
+        .map(|conversation| conversation.as_id().to_string());
 
-    stored.instructions =
-        get_string(response_json, "instructions").or_else(|| original_body.instructions.clone());
-
-    stored.model = get_string(response_json, "model").or_else(|| Some(original_body.model.clone()));
-
-    stored.safety_identifier = original_body.user.clone();
-    stored.conversation_id = original_body.conversation.clone();
-
-    stored.metadata = response_json
-        .get("metadata")
-        .and_then(|v| v.as_object())
-        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-        .unwrap_or_else(|| original_body.metadata.clone().unwrap_or_default());
-
-    stored.previous_response_id = get_string(response_json, "previous_response_id")
-        .map(|s| ResponseId::from(s.as_str()))
+    stored.previous_response_id = response_json
+        .get("previous_response_id")
+        .and_then(|v| v.as_str())
+        .map(ResponseId::from)
         .or_else(|| {
             original_body
                 .previous_response_id
@@ -164,8 +156,8 @@ pub fn build_stored_response(
                 .map(ResponseId::from)
         });
 
-    if let Some(id_str) = get_string(response_json, "id") {
-        stored.id = ResponseId::from(id_str.as_str());
+    if let Some(id_str) = response_json.get("id").and_then(|v| v.as_str()) {
+        stored.id = ResponseId::from(id_str);
     }
 
     stored.raw_response = response_json.clone();
@@ -352,7 +344,6 @@ pub async fn persist_conversation_items(
     let mut stored_response = build_stored_response(response_json, original_body);
     stored_response.id = response_id.clone();
     stored_response.input = Value::Array(input_items.clone());
-    stored_response.output = Value::Array(output_items.clone());
 
     response_storage
         .store_response(stored_response)
@@ -361,7 +352,7 @@ pub async fn persist_conversation_items(
 
     // Check if conversation is provided and validate it exists
     let conv_id_opt = if let Some(id) = &original_body.conversation {
-        let conv_id = ConversationId::from(id.as_str());
+        let conv_id = ConversationId::from(id.as_id());
         match conversation_storage.get_conversation(&conv_id).await {
             Ok(Some(_)) => Some(conv_id),
             Ok(None) => {

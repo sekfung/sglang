@@ -386,7 +386,7 @@ pub async fn create_test_context(config: RouterConfig) -> Arc<AppContext> {
     }
 
     // Initialize MCP manager with empty config
-    use smg_mcp::{McpConfig, McpManager};
+    use smg_mcp::{McpConfig, McpOrchestrator as McpManager};
     let empty_config = McpConfig {
         servers: vec![],
         pool: Default::default(),
@@ -510,7 +510,7 @@ pub async fn create_test_context_with_parsers(config: RouterConfig) -> Arc<AppCo
     }
 
     // Initialize MCP manager with empty config
-    use smg_mcp::{McpConfig, McpManager};
+    use smg_mcp::{McpConfig, McpOrchestrator as McpManager};
     let empty_config = McpConfig {
         servers: vec![],
         pool: Default::default(),
@@ -535,7 +535,7 @@ pub async fn create_test_context_with_mcp_config(
     config: RouterConfig,
     mcp_config_path: &str,
 ) -> Arc<AppContext> {
-    use smg_mcp::{McpConfig, McpManager};
+    use smg_mcp::{McpConfig, McpOrchestrator as McpManager};
 
     let client = reqwest::Client::new();
 

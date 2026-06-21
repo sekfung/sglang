@@ -52,16 +52,7 @@ pub(crate) async fn route_responses(
     headers: Option<http::HeaderMap>,
     model_id: Option<String>,
 ) -> Response {
-    // 1. Reject background mode (no longer supported)
-    let is_background = request.background.unwrap_or(false);
-    if is_background {
-        return error::bad_request(
-            "unsupported_parameter",
-            "Background mode is not supported. Please set 'background' to false or omit it.",
-        );
-    }
-
-    // 2. Route based on execution mode
+    // 1. Route based on execution mode
     let is_streaming = request.stream.unwrap_or(false);
     if is_streaming {
         route_responses_streaming(ctx, request, headers, model_id).await

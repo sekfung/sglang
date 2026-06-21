@@ -324,8 +324,6 @@ impl ResponseStreamEventEmitter {
             Self::add_optional_field(&mut response_obj, "temperature", &req.temperature);
             Self::add_optional_field(&mut response_obj, "top_p", &req.top_p);
             Self::add_optional_field(&mut response_obj, "truncation", &req.truncation);
-            Self::add_optional_field(&mut response_obj, "user", &req.user);
-
             response_obj["parallel_tool_calls"] = json!(req.parallel_tool_calls.unwrap_or(true));
             response_obj["store"] = json!(req.store.unwrap_or(true));
             response_obj["tools"] = json!(req.tools.as_ref().unwrap_or(&vec![]));

@@ -37,11 +37,11 @@ use crate::{
             is_function_call_type, is_response_event, FunctionCallEvent, ItemType, McpEvent,
             OutputItemEvent, ResponseEvent,
         },
-        responses::{ResponseToolType, ResponsesRequest},
+        responses::ResponsesRequest,
     },
     routers::{
         header_utils::{apply_request_headers, preserve_response_headers},
-        mcp_utils::{ensure_request_mcp_client, McpLoopConfig},
+        mcp_utils::{ensure_request_mcp_client, response_tool_as_mcp, response_tool_is_mcp, McpLoopConfig},
         openai::context::{RequestContext, StreamingEventContext, StreamingRequest},
         persistence_utils::persist_conversation_items,
         streaming_utils::BreakerTrackedStream,
@@ -106,7 +106,7 @@ pub(super) fn apply_event_transformations_inplace(
                     .map(|tools| {
                         tools
                             .iter()
-                            .any(|t| matches!(t.r#type, ResponseToolType::Mcp))
+                            .any(response_tool_is_mcp)
                     })
                     .unwrap_or(false);
 
@@ -169,7 +169,7 @@ fn build_mcp_tools_value(original_body: &ResponsesRequest) -> Option<Value> {
     let tools = original_body.tools.as_ref()?;
     let mcp_tool = tools
         .iter()
-        .find(|t| matches!(t.r#type, ResponseToolType::Mcp) && t.server_url.is_some())?;
+        .find_map(|t| response_tool_as_mcp(t).filter(|t| t.server_url.is_some()))?;
 
     let tools_array = vec![json!({
         "type": "mcp",
@@ -437,7 +437,7 @@ pub(super) fn send_final_response_event(
     tx: &mpsc::UnboundedSender<Result<Bytes, io::Error>>,
     sequence_number: &mut u64,
     state: &ToolLoopState,
-    active_mcp: Option<&Arc<smg_mcp::McpManager>>,
+    active_mcp: Option<&Arc<smg_mcp::McpOrchestrator>>,
     ctx: &StreamingEventContext<'_>,
 ) -> bool {
     let mut final_response = match handler.snapshot_final_response() {
@@ -753,7 +753,7 @@ pub(super) async fn handle_streaming_with_tool_interception(
     worker: Arc<dyn crate::core::Worker>,
     headers: Option<&HeaderMap>,
     req: StreamingRequest,
-    active_mcp: &Arc<smg_mcp::McpManager>,
+    active_mcp: &Arc<smg_mcp::McpOrchestrator>,
     server_keys: Vec<String>,
 ) -> Response {
     // Transform MCP tools to function tools in payload
@@ -799,8 +799,8 @@ pub(super) async fn handle_streaming_with_tool_interception(
             .and_then(|tools| {
                 tools
                     .iter()
-                    .find(|t| matches!(t.r#type, ResponseToolType::Mcp))
-                    .and_then(|t| t.server_label.as_deref())
+                    .find_map(response_tool_as_mcp)
+                    .map(|t| t.server_label.as_str())
             })
             .unwrap_or("mcp");
 

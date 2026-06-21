@@ -132,6 +132,8 @@ impl HarmonyResponseProcessor {
         if total_reasoning_tokens > 0 {
             usage.completion_tokens_details = Some(CompletionTokensDetails {
                 reasoning_tokens: Some(total_reasoning_tokens),
+                accepted_prediction_tokens: None,
+                rejected_prediction_tokens: None,
             });
         }
 
@@ -273,6 +275,8 @@ impl HarmonyResponseProcessor {
         if parsed.reasoning_token_count > 0 {
             usage.completion_tokens_details = Some(CompletionTokensDetails {
                 reasoning_tokens: Some(parsed.reasoning_token_count),
+                accepted_prediction_tokens: None,
+                rejected_prediction_tokens: None,
             });
         }
 
@@ -293,12 +297,17 @@ impl HarmonyResponseProcessor {
 
         // Map analysis channel → ResponseOutputItem::Reasoning
         if let Some(analysis) = parsed.analysis {
-            let reasoning_item = ResponseOutputItem::Reasoning {
-                id: format!("reasoning_{}", dispatch.request_id),
-                summary: vec![],
-                content: vec![ResponseReasoningContent::ReasoningText { text: analysis }],
-                status: Some("completed".to_string()),
-            };
+            let reasoning_item = serde_json::from_value(serde_json::json!({
+                "type": "reasoning",
+                "id": format!("reasoning_{}", dispatch.request_id),
+                "summary": [],
+                "content": [{
+                    "type": "reasoning_text",
+                    "text": analysis,
+                }],
+                "status": "completed",
+            }))
+            .map_err(|e| error::internal_error("build_reasoning_item_failed", e.to_string()))?;
             output.push(reasoning_item);
         }
 
@@ -313,6 +322,7 @@ impl HarmonyResponseProcessor {
                     logprobs: None,
                 }],
                 status: "completed".to_string(),
+                phase: None,
             };
             output.push(message_item);
         }

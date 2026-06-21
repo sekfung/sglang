@@ -5,8 +5,9 @@ use tracing::warn;
 
 use crate::protocols::{
     event_types::is_response_event,
-    responses::{ResponseToolType, ResponsesRequest},
+    responses::ResponsesRequest,
 };
+use crate::routers::mcp_utils::response_tool_as_mcp;
 
 /// Check if a JSON value is missing, null, or an empty string
 fn is_missing_or_empty(value: Option<&Value>) -> bool {
@@ -81,19 +82,9 @@ pub(super) fn patch_response_with_request_metadata(
         is_missing_or_empty(o.get("model"))
     });
 
-    // Set safety_identifier if null (but key exists)
-    if let Some(user) = &original_body.user {
-        if obj
-            .get("safety_identifier")
-            .is_some_and(|v: &Value| v.is_null())
-        {
-            obj.insert("safety_identifier".to_string(), Value::String(user.clone()));
-        }
-    }
-
     // Attach conversation id for client response
     if let Some(conv_id) = &original_body.conversation {
-        obj.insert("conversation".to_string(), json!({ "id": conv_id }));
+        obj.insert("conversation".to_string(), json!({ "id": conv_id.as_id() }));
     }
 }
 
@@ -180,7 +171,7 @@ pub(super) fn rewrite_streaming_block(
 
     // Attach conversation id
     if let Some(conv_id) = &original_body.conversation {
-        response_obj.insert("conversation".to_string(), json!({ "id": conv_id }));
+        response_obj.insert("conversation".to_string(), json!({ "id": conv_id.as_id() }));
         changed = true;
     }
 
@@ -202,12 +193,20 @@ fn insert_optional_string(map: &mut Map<String, Value>, key: &str, value: &Optio
     }
 }
 
+fn insert_optional_json<T: serde::Serialize>(map: &mut Map<String, Value>, key: &str, value: &Option<T>) {
+    if let Some(v) = value {
+        if let Ok(value) = serde_json::to_value(v) {
+            map.insert(key.to_string(), value);
+        }
+    }
+}
+
 /// Mask function tools as MCP tools in response for client
 pub(super) fn mask_tools_as_mcp(resp: &mut Value, original_body: &ResponsesRequest) {
     let mcp_tool = original_body.tools.as_ref().and_then(|tools| {
         tools
             .iter()
-            .find(|t| matches!(t.r#type, ResponseToolType::Mcp) && t.server_url.is_some())
+            .find_map(|t| response_tool_as_mcp(t).filter(|t| t.server_url.is_some()))
     });
 
     let Some(t) = mcp_tool else {
@@ -216,17 +215,11 @@ pub(super) fn mask_tools_as_mcp(resp: &mut Value, original_body: &ResponsesReque
 
     let mut m = Map::new();
     m.insert("type".to_string(), json!("mcp"));
-    insert_optional_string(&mut m, "server_label", &t.server_label);
+    m.insert("server_label".to_string(), json!(t.server_label));
     insert_optional_string(&mut m, "server_url", &t.server_url);
     insert_optional_string(&mut m, "server_description", &t.server_description);
-    insert_optional_string(&mut m, "require_approval", &t.require_approval);
-
-    if let Some(allowed) = &t.allowed_tools {
-        m.insert(
-            "allowed_tools".to_string(),
-            Value::Array(allowed.iter().map(|s| json!(s)).collect()),
-        );
-    }
+    insert_optional_json(&mut m, "require_approval", &t.require_approval);
+    insert_optional_json(&mut m, "allowed_tools", &t.allowed_tools);
 
     if let Some(obj) = resp.as_object_mut() {
         obj.insert("tools".to_string(), json!([Value::Object(m)]));

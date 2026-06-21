@@ -10,14 +10,14 @@ use uuid::Uuid;
 use super::execution::ToolResult;
 use crate::{
     protocols::{
-        common::{ToolCall, ToolChoice, ToolChoiceValue},
+        common::ToolCall,
         responses::{
             McpToolInfo, ResponseContentPart, ResponseInput, ResponseInputOutputItem,
-            ResponseOutputItem, ResponseReasoningContent, ResponseTool, ResponseToolType,
-            ResponsesRequest, ResponsesResponse, StringOrContentParts,
+            ResponseOutputItem, ResponseReasoningContent, ResponseTool, ResponsesRequest,
+            ResponsesResponse, ResponsesToolChoice, StringOrContentParts, ToolChoiceOptions,
         },
     },
-    routers::{error, grpc::common::responses::ResponsesContext},
+    routers::{error, grpc::common::responses::ResponsesContext, mcp_utils::response_tool_as_function},
 };
 
 /// Record of a single MCP tool call execution
@@ -93,8 +93,7 @@ pub(super) fn build_mcp_tool_names_set(
 ) -> std::collections::HashSet<&str> {
     request_tools
         .iter()
-        .filter(|t| t.r#type == ResponseToolType::Mcp)
-        .filter_map(|t| t.function.as_ref().map(|f| f.name.as_str()))
+        .filter_map(|t| response_tool_as_function(t).map(|f| f.name.as_str()))
         .collect()
 }
 
@@ -120,6 +119,7 @@ pub(super) fn build_next_request_with_tools(
                 content: StringOrContentParts::String(text),
                 role: "user".to_string(),
                 r#type: None,
+                phase: None,
             }]
         }
     };
@@ -130,14 +130,16 @@ pub(super) fn build_next_request_with_tools(
 
     // Add reasoning if present (from analysis channel)
     if let Some(analysis_text) = analysis {
-        items.push(ResponseInputOutputItem::Reasoning {
-            id: format!("reasoning_{}", assistant_id),
-            summary: vec![],
-            content: vec![ResponseReasoningContent::ReasoningText {
-                text: analysis_text,
+        items.push(from_value(json!({
+            "type": "reasoning",
+            "id": format!("reasoning_{}", assistant_id),
+            "summary": [],
+            "content": [{
+                "type": "reasoning_text",
+                "text": analysis_text,
             }],
-            status: Some("completed".to_string()),
-        });
+            "status": "completed",
+        })).map_err(|e| Box::new(error::internal_error("build_reasoning_item_failed", e.to_string())))?);
     }
 
     // Add message content if present (from final channel)
@@ -151,6 +153,7 @@ pub(super) fn build_next_request_with_tools(
                 logprobs: None,
             }],
             status: Some("completed".to_string()),
+            phase: None,
         });
     }
 
@@ -201,7 +204,7 @@ pub(super) fn build_next_request_with_tools(
     // Switch tool_choice to "auto" for subsequent iterations
     // This prevents infinite loops when original tool_choice was "required" or specific function
     // After receiving tool results, the model should be free to decide whether to call more tools or finish
-    request.tool_choice = Some(ToolChoice::Value(ToolChoiceValue::Auto));
+    request.tool_choice = Some(ResponsesToolChoice::Options(ToolChoiceOptions::Auto));
 
     Ok(request)
 }
@@ -235,6 +238,7 @@ pub(super) fn inject_mcp_metadata(
         id: format!("mcpl_{}", Uuid::new_v4()),
         server_label: tracking.server_label.clone(),
         tools: tools_info,
+        error: None,
     };
 
     // Build mcp_call items for each tracked call
@@ -325,7 +329,10 @@ pub(super) async fn load_previous_messages(
 
     for stored in chain.responses.iter() {
         history_items.extend(deserialize_items(&stored.input, "input"));
-        history_items.extend(deserialize_items(&stored.output, "output"));
+        history_items.extend(deserialize_items(
+            stored.raw_response.get("output").unwrap_or(&Value::Array(vec![])),
+            "output",
+        ));
     }
 
     debug!(
@@ -351,6 +358,7 @@ pub(super) async fn load_previous_messages(
                 content: StringOrContentParts::String(text),
                 role: "user".to_string(),
                 r#type: None,
+                phase: None,
             });
             history_items
         }

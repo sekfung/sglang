@@ -20,8 +20,8 @@ use crate::protocols::{
     common::{ContentPart, Tool},
     responses::{
         ReasoningEffort as ResponsesReasoningEffort, ResponseContentPart, ResponseInput,
-        ResponseInputOutputItem, ResponseReasoningContent, ResponseTool, ResponseToolType,
-        ResponsesRequest, StringOrContentParts,
+        ResponseInputOutputItem, ResponseReasoningContent, ResponseTool, ResponsesRequest,
+        StringOrContentParts,
     },
 };
 
@@ -82,26 +82,27 @@ impl ToolLike for Tool {
 impl ToolLike for ResponseTool {
     fn is_builtin(&self) -> bool {
         matches!(
-            self.r#type,
-            ResponseToolType::WebSearchPreview | ResponseToolType::CodeInterpreter
+            self,
+            ResponseTool::WebSearchPreview(_) | ResponseTool::CodeInterpreter(_)
         )
     }
 
     fn is_custom(&self) -> bool {
-        matches!(
-            self.r#type,
-            ResponseToolType::Mcp | ResponseToolType::Function
-        )
+        matches!(self, ResponseTool::Mcp(_) | ResponseTool::Function(_))
     }
 
     fn to_tool_description(&self) -> Option<ToolDescription> {
-        self.function.as_ref().map(|func| {
-            ToolDescription::new(
-                func.name.clone(),
-                func.description.clone().unwrap_or_default(),
-                Some(func.parameters.clone()),
-            )
-        })
+        match self {
+            ResponseTool::Function(function_tool) => {
+                let func = &function_tool.function;
+                Some(ToolDescription::new(
+                    func.name.clone(),
+                    func.description.clone().unwrap_or_default(),
+                    Some(func.parameters.clone()),
+                ))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -396,12 +397,7 @@ impl HarmonyBuilder {
                 .map(|tools| {
                     tools
                         .iter()
-                        .map(|tool| match tool.r#type {
-                            ResponseToolType::Function => "function",
-                            ResponseToolType::WebSearchPreview => "web_search_preview",
-                            ResponseToolType::CodeInterpreter => "code_interpreter",
-                            ResponseToolType::Mcp => "mcp",
-                        })
+                        .map(ResponseTool::as_str)
                         .collect()
                 })
                 .unwrap_or_default();
@@ -496,7 +492,7 @@ impl HarmonyBuilder {
                     .filter_map(|part| match part {
                         ResponseContentPart::OutputText { text, .. } => Some(text.clone()),
                         ResponseContentPart::InputText { text } => Some(text.clone()),
-                        ResponseContentPart::Unknown => None,
+                        _ => None,
                     })
                     .collect();
 
@@ -648,7 +644,7 @@ impl HarmonyBuilder {
                             .filter_map(|part| match part {
                                 ResponseContentPart::OutputText { text, .. } => Some(text.clone()),
                                 ResponseContentPart::InputText { text } => Some(text.clone()),
-                                ResponseContentPart::Unknown => None,
+                                _ => None,
                             })
                             .collect::<Vec<_>>()
                             .join("\n")
@@ -666,6 +662,10 @@ impl HarmonyBuilder {
                     content_type: None,
                 })
             }
+            _ => Err(format!(
+                "Unsupported response input item for Harmony conversion: {:?}",
+                item
+            )),
         }
     }
 

@@ -145,6 +145,7 @@ pub(crate) fn responses_to_chat(req: &ResponsesRequest) -> Result<ChatCompletion
                             tool_call_id: call_id.clone(),
                         });
                     }
+                    _ => {}
                 }
             }
         }
@@ -182,6 +183,8 @@ pub(crate) fn responses_to_chat(req: &ResponsesRequest) -> Result<ChatCompletion
         stream_options: if is_streaming {
             Some(StreamOptions {
                 include_usage: Some(true),
+                continuous_usage_stats: None,
+                include_obfuscation: None,
             })
         } else {
             None
@@ -191,7 +194,7 @@ pub(crate) fn responses_to_chat(req: &ResponsesRequest) -> Result<ChatCompletion
         top_p: req.top_p,
         skip_special_tokens: true,
         tools,
-        tool_choice: req.tool_choice.clone(),
+        tool_choice: req.tool_choice.as_ref().map(|choice| choice.to_chat_tool_choice()),
         response_format: map_text_to_response_format(&req.text),
         ..Default::default()
     })
@@ -297,6 +300,7 @@ pub(crate) fn chat_to_responses(
                     logprobs: choice.logprobs.clone(),
                 }],
                 status: "completed".to_string(),
+                phase: None,
             });
         }
     }
@@ -304,14 +308,19 @@ pub(crate) fn chat_to_responses(
     // Convert reasoning content if present (O1-style models)
     if let Some(reasoning) = &choice.message.reasoning_content {
         if !reasoning.is_empty() {
-            output.push(ResponseOutputItem::Reasoning {
-                id: format!("reasoning_{}", chat_resp.id),
-                summary: vec![],
-                content: vec![ReasoningText {
-                    text: reasoning.clone(),
-                }],
-                status: Some("completed".to_string()),
-            });
+            output.push(
+                serde_json::from_value(serde_json::json!({
+                    "type": "reasoning",
+                    "id": format!("reasoning_{}", chat_resp.id),
+                    "summary": [],
+                    "content": [{
+                        "type": "reasoning_text",
+                        "text": reasoning,
+                    }],
+                    "status": "completed",
+                }))
+                .expect("valid reasoning output item"),
+            );
         }
     }
 
@@ -395,6 +404,7 @@ mod tests {
                         text: "Hello!".to_string(),
                     }],
                     status: None,
+                    phase: None,
                 },
                 ResponseInputOutputItem::Message {
                     id: "msg_2".to_string(),
@@ -405,6 +415,7 @@ mod tests {
                         logprobs: None,
                     }],
                     status: None,
+                    phase: None,
                 },
             ]),
             ..Default::default()

@@ -5,17 +5,19 @@ use std::sync::Arc;
 use axum::response::Response;
 use data_connector::{ConversationItemStorage, ConversationStorage, ResponseStorage};
 use serde_json::to_value;
-use smg_mcp::McpManager;
+use smg_mcp::McpOrchestrator as McpManager;
 use tracing::{debug, error, warn};
 
 use crate::{
     core::WorkerRegistry,
     protocols::{
         common::Tool,
-        responses::{ResponseTool, ResponseToolType, ResponsesRequest, ResponsesResponse},
+        responses::{ResponseTool, ResponsesRequest, ResponsesResponse},
     },
     routers::{
-        error, mcp_utils::ensure_request_mcp_client, persistence_utils::persist_conversation_items,
+        error,
+        mcp_utils::{ensure_request_mcp_client, response_tool_as_function, response_tool_is_mcp},
+        persistence_utils::persist_conversation_items,
     },
 };
 
@@ -31,7 +33,7 @@ pub(crate) async fn ensure_mcp_connection(
     let has_mcp_tools = tools
         .map(|t| {
             t.iter()
-                .any(|tool| matches!(tool.r#type, ResponseToolType::Mcp))
+                .any(response_tool_is_mcp)
         })
         .unwrap_or(false);
 
@@ -104,20 +106,14 @@ pub(crate) fn extract_tools_from_response_tools(
     tools
         .iter()
         .filter_map(|rt| {
-            match rt.r#type {
-                // Function tools: Schema in request
-                ResponseToolType::Function => rt.function.as_ref().map(|f| Tool {
+            let function = response_tool_as_function(rt)?;
+            if include_mcp || !response_tool_is_mcp(rt) {
+                Some(Tool {
                     tool_type: "function".to_string(),
-                    function: f.clone(),
-                }),
-                // MCP tools: Schema populated by convert_mcp_tools_to_response_tools()
-                // Only include if requested (Harmony case)
-                ResponseToolType::Mcp if include_mcp => rt.function.as_ref().map(|f| Tool {
-                    tool_type: "function".to_string(),
-                    function: f.clone(),
-                }),
-                // Hosted tools: No schema available, skip
-                _ => None,
+                    function: function.clone(),
+                })
+            } else {
+                None
             }
         })
         .collect()
