@@ -1304,7 +1304,7 @@ class Scheduler(
             for req in batch.reqs:
                 start = len(req.prefix_indices)
                 end = start + req.extend_range.length
-                fill_ids = req.origin_input_ids + req.output_ids
+                fill_ids = list(req.origin_input_ids) + list(req.output_ids)
                 if start == 0:
                     tokens = fill_ids[start:end]
                     column_starts.append(0)

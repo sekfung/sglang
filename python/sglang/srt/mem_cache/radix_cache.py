@@ -448,7 +448,7 @@ class RadixCache(SessionRadixCacheMixin, KVCacheEventMixin, BasePrefixCache):
             self.token_to_kv_pool_allocator.free(kv_indices)
             return
 
-        token_ids = (req.origin_input_ids + req.output_ids)[:kv_committed_len]
+        token_ids = (list(req.origin_input_ids) + list(req.output_ids))[:kv_committed_len]
         kv_indices = self.req_to_token_pool.req_to_token[
             req.req_pool_idx, : len(token_ids)
         ]
