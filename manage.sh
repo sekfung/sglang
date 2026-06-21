@@ -3,13 +3,14 @@
 # SGLang + Gateway — 一键管理
 # =============================================================================
 #   ./manage.sh up 256k     # 启动 256K worker + gateway
-#   ./manage.sh up 128k     # 启动 128K worker + gateway
 #   ./manage.sh up           # 只启动 gateway (不加 worker)
 #   ./manage.sh down 256k   # 停止 256K + gateway
 #   ./manage.sh restart 256k # 重启 256K + gateway
 #   ./manage.sh restart      # 只重启 gateway
 #   ./manage.sh logs 256k   # 查看 256K 日志
 #   ./manage.sh status      # 全部状态
+#   ./manage.sh shell       # 进入 gateway 容器
+#   ./manage.sh shell 256k  # 进入 worker 容器
 # =============================================================================
 set -euo pipefail
 
@@ -31,9 +32,10 @@ action:
   up        启动服务
   down      停止服务
   restart   重启服务
-  logs      查看日志
+  logs      查看日志 (实时跟踪)
   status    查看状态 (同 ps)
   ps        列出容器
+  shell     进入容器交互式 shell
 
 profile (可选, 不填只操作 gateway):
   128k      DeepSeek-V4 128K worker
@@ -46,6 +48,8 @@ profile (可选, 不填只操作 gateway):
   $0 restart            只重启 gateway (不重启 worker)
   $0 down 256k          停止 256K worker + gateway
   $0 logs 256k          查看 256K 服务日志 (实时跟踪)
+  $0 shell              进入 gateway 容器
+  $0 shell 256k         进入 worker-256k 容器
   $0 status             查看所有运行中的服务
 
 服务架构:
@@ -56,6 +60,17 @@ EOF
 }
 
 [[ "$ACTION" == "help" ]] && usage
+
+# shell is a standalone action (not compose)
+if [[ "$ACTION" == "shell" ]]; then
+  if [ -n "$PROFILE" ]; then
+    CONTAINER="sglang-worker-${PROFILE}"
+  else
+    CONTAINER="sglang-gateway"
+  fi
+  exec docker exec -it "$CONTAINER" bash
+fi
+
 [[ "$ACTION" =~ ^(up|down|restart|logs|status|ps)$ ]] || usage
 
 # Map status → ps (compose doesn't have a "status" subcommand)
