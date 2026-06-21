@@ -282,6 +282,9 @@ impl PyOracleConfig {
             pool_min: self.pool_min,
             pool_max: self.pool_max,
             pool_timeout_secs: self.pool_timeout_secs,
+            // data-connector 2.3: new fields, use defaults
+            external_auth: false,
+            schema: None,
         }
     }
 }
@@ -316,6 +319,8 @@ impl PyRedisConfig {
             url: self.url.clone(),
             pool_max: self.pool_max,
             retention_days: self.retention_days,
+            // data-connector 2.3: new field, use default
+            schema: None,
         }
     }
 }
@@ -344,6 +349,8 @@ impl PyPostgresConfig {
         config::PostgresConfig {
             db_url: self.db_url.clone().unwrap_or_default(),
             pool_max: self.pool_max,
+            // data-connector 2.3: new field, use default
+            schema: None,
         }
     }
 }
