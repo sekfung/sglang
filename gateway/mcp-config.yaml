@@ -1,0 +1,15 @@
+# MCP config for the sgl-model-gateway — static stdio MCP servers.
+# Parsed by the gateway via serde_yaml (--mcp-config-path).
+# The regular responses MCP loop uses dynamic HTTP servers; static stdio
+# servers here are registered at startup for tool discovery/live listing.
+servers:
+  - name: "dummy"
+    command: "python3"
+    args:
+      - "/opt/models/sglang/gateway/dummy_mcp_server.py"
+    protocol: "stdio"
+    required: true
+
+# Refresh the tool inventory eagerly so tools are visible immediately.
+inventory:
+  enable_refresh: false

@@ -1,0 +1,196 @@
+# =============================================================================
+# SGLang + Gateway — 统一 Compose
+# =============================================================================
+# 管理: ./manage.sh <profile> <action>
+#   ./manage.sh 256k up       # 启动 256K worker + gateway
+#   ./manage.sh 128k up       # 启动 128K worker + gateway
+#   ./manage.sh all restart   # 重启 gateway (不重启 worker)
+#   ./manage.sh 256k logs     # 查看 256K 日志
+#
+# 端口:
+#   8080  Gateway（对外 OpenAI 兼容端点）
+#   21000 SGLang gRPC worker
+#   21001 Worker HTTP sidecar
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — Gateway 状态持久化（profile: persistence）
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: sglang-postgres
+    network_mode: host
+    environment:
+      POSTGRES_USER: sglang
+      POSTGRES_PASSWORD: sglang
+      POSTGRES_DB: sglang_gateway
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sglang -d sglang_gateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    profiles:
+      - persistence
+
+  # ---------------------------------------------------------------------------
+  # SGLang Gateway — 统一入口 + MCP 工具编排
+  # ---------------------------------------------------------------------------
+  gateway:
+    image: docker.io/sekfung/sglang:local
+    container_name: sglang-gateway
+    network_mode: host
+    volumes:
+      - ./:/src/sglang
+      - /opt/models:/opt/models
+      - /opt/models/sglang/gateway:/opt/models/sglang/gateway
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Shanghai
+    command:
+      - /opt/models/sglang/gateway/gateway-entrypoint.sh
+      - python3
+      - -m
+      - sglang_router.launch_router
+      - --worker-urls
+      - grpc://127.0.0.1:21000
+      - --model-path
+      - /opt/models/deepseek-v4-flash
+      - --tool-call-parser
+      - deepseek_v4
+      - --reasoning-parser
+      - deepseek-r1
+      - --mcp-config-path
+      - /opt/models/sglang/gateway/mcp-config.yaml
+      - --chat-template
+      - /opt/models/sglang/gateway/chat_template.jinja
+      - --history-backend
+      - memory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # SGLang gRPC Worker 128K (profile: 128k)
+  # ---------------------------------------------------------------------------
+  worker-128k:
+    image: docker.io/sekfung/sglang:local
+    container_name: sglang-worker-128k
+    network_mode: host
+    privileged: true
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./:/src/sglang
+      - ../flashinfer:/src/flashinfer
+      - /opt/models:/opt/models
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - CUDA_VISIBLE_DEVICES=0,1,2,3
+      - NCCL_IB_DISABLE=1
+      - NCCL_SHM_DISABLE=0
+      - NCCL_P2P_DISABLE=0
+      - HF_ENDPOINT=https://hf-mirror.com
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
+      - --config
+      - /opt/models/sglang/sglang-128k.yml
+      - --served-model-name
+      - deepseek-v4-flash
+      - --grpc-mode
+      - --grpc-http-sidecar-port
+      - "21001"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "21000"
+      - --enable-p2p
+      - --trust-remote-code
+      - --enable-cache-report
+      - --enable-metrics
+      - --allow-auto-truncate
+      - --enable-prefill-cp
+      - --cp-strategy
+      - interleave
+    restart: unless-stopped
+    profiles:
+      - "128k"
+
+  # ---------------------------------------------------------------------------
+  # SGLang gRPC Worker 256K (profile: 256k)
+  # ---------------------------------------------------------------------------
+  worker-256k:
+    image: docker.io/sekfung/sglang:local
+    container_name: sglang-worker-256k
+    network_mode: host
+    privileged: true
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./:/src/sglang
+      - ../flashinfer:/src/flashinfer
+      - /opt/models:/opt/models
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - CUDA_VISIBLE_DEVICES=0,1,2,3
+      - NCCL_IB_DISABLE=1
+      - NCCL_SHM_DISABLE=0
+      - NCCL_P2P_DISABLE=0
+      - HF_ENDPOINT=https://hf-mirror.com
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
+      - --config
+      - /opt/models/sglang/sglang-256k.yml
+      - --served-model-name
+      - deepseek-v4-flash
+      - --grpc-mode
+      - --grpc-http-sidecar-port
+      - "21001"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "21000"
+      - --enable-p2p
+      - --trust-remote-code
+      - --enable-cache-report
+      - --enable-metrics
+      - --enable-request-time-stats-logging
+      - --allow-auto-truncate
+      - --enable-prefill-cp
+      - --cp-strategy
+      - interleave
+    restart: unless-stopped
+    profiles:
+      - "256k"
+
+volumes:
+  pgdata:
+    name: sglang-pgdata
