@@ -88,7 +88,7 @@ wfaas = "1.0.4"
 data-connector = "2.3.0"
 smg-mcp = "2.3.0"
 smg-wasm = "1.1.1"
-smg-mesh = "1.0.0"
+smg-mesh = "1.4.1"
 smg-grpc-client = "1.6.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2.2"
@@ -107,7 +107,7 @@ jsonwebtoken = { version = "9.3", default-features = false, features = ["use_pem
 num-traits = "0.2"
 num-bigint = "0.4"
 base64 = "0.22"
-openai-harmony = { git = "https://github.com/openai/harmony", tag = "v0.0.4" }
+openai-harmony = "0.0.8"
 openmetrics-parser = "0.4.4"
 arc-swap = "1.7.1"
 

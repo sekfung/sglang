@@ -418,7 +418,7 @@ fn build_tool_response(
         });
 
         output.push(ResponseOutputItem::FunctionToolCall {
-            id: tool_call.id.clone(),
+            id: Some(tool_call.id.clone()),
             call_id: tool_call.id.clone(),
             name: tool_call.function.name.clone(),
             arguments: tool_call.function.arguments.clone().unwrap_or_default(),
@@ -435,7 +435,7 @@ fn build_tool_response(
     // Add function tool calls WITHOUT output (need caller execution)
     for tool_call in function_tool_calls {
         output.push(ResponseOutputItem::FunctionToolCall {
-            id: tool_call.id.clone(),
+            id: Some(tool_call.id.clone()),
             call_id: tool_call.id.clone(),
             name: tool_call.function.name.clone(),
             arguments: tool_call.function.arguments.clone().unwrap_or_default(),

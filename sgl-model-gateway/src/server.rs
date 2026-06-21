@@ -16,9 +16,9 @@ use axum::{
 use rustls::crypto::ring;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use smg_mesh::{
-    rate_limit_window::RateLimitWindow, MeshServerConfig, MeshServerHandler, MeshSyncManager,
-};
+use smg_mesh::{MeshServerConfig, MeshServerHandler};
+
+use crate::smg_mesh_compat::MeshSyncManager;
 use tokio::{signal, spawn};
 use tracing::{debug, error, info, warn, Level};
 use wfaas::LoggingSubscriber;
@@ -736,55 +736,33 @@ pub async fn startup(config: ServerConfig) -> Result<(), Box<dyn std::error::Err
     let (mesh_handler, mesh_sync_manager) = if let Some(mesh_server_config) =
         &config.mesh_server_config
     {
-        // Create HA sync manager with stores first
-        use smg_mesh::{partition::PartitionDetector, stores::StateStores, sync::MeshSyncManager};
-        let stores = Arc::new(StateStores::with_self_name(
-            mesh_server_config.self_name.clone(),
-        ));
-        let sync_manager = Arc::new(MeshSyncManager::new(
-            stores.clone(),
-            mesh_server_config.self_name.clone(),
-        ));
+        // smg-mesh 1.4.1: state stores and sync manager were folded into the
+        // MeshKV-backed handler. Build the server, then wrap the handler in the
+        // compat MeshSyncManager which reimplements the old high-level state API
+        // on top of the CRDT kv namespaces.
+        use smg_mesh::MeshServerBuilder;
 
-        // Create partition detector
-        let partition_detector = Arc::new(PartitionDetector::default());
-
-        // Initialize rate-limit hash ring with current membership
-        sync_manager.update_rate_limit_membership();
-
-        // Start rate limit window reset task
-        let window_manager = RateLimitWindow::new(sync_manager.clone(), 1); // Reset every 1 second
-        spawn(async move {
-            window_manager.start_reset_task().await;
-        });
-
-        // Create mesh server builder and build with stores
-        use smg_mesh::service::MeshServerBuilder;
         let builder = MeshServerBuilder::new(
             mesh_server_config.self_name.clone(),
-            mesh_server_config.self_addr,
+            mesh_server_config.bind_addr,
+            mesh_server_config.advertise_addr,
             mesh_server_config.init_peer,
         );
-        let (mesh_server, handler) = builder.build_with_stores(Some(stores.clone()));
+        let (mesh_server, handler) = builder.build();
+        let handler = Arc::new(handler);
+        let sync_manager = Arc::new(MeshSyncManager::new(handler.clone()));
 
-        // Spawn the mesh server with stores and partition detector
-        let stores_for_server = stores.clone();
-        let sync_manager_for_server = sync_manager.clone();
-        let partition_detector_for_server = partition_detector.clone();
+        // Initialize rate-limit membership (no-op under local-only rate limiting)
+        sync_manager.update_rate_limit_membership();
+
+        // Spawn the mesh gossip server.
         spawn(async move {
-            if let Err(e) = mesh_server
-                .start_serve_with_stores(
-                    Some(stores_for_server),
-                    Some(sync_manager_for_server),
-                    Some(partition_detector_for_server),
-                )
-                .await
-            {
+            if let Err(e) = mesh_server.start().await {
                 tracing::error!("Mesh server failed: {}", e);
             }
         });
 
-        (Some(Arc::new(handler)), Some(sync_manager))
+        (Some(handler), Some(sync_manager))
     } else {
         (None, None)
     };
@@ -975,7 +953,7 @@ pub async fn startup(config: ServerConfig) -> Result<(), Box<dyn std::error::Err
     let mesh_port = config
         .mesh_server_config
         .as_ref()
-        .map(|c| c.self_addr.port());
+        .map(|c| c.bind_addr.port());
 
     let app_state = Arc::new(AppState {
         router,

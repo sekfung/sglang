@@ -20,7 +20,7 @@ use smg::{
     service_discovery::ServiceDiscoveryConfig,
     version,
 };
-use smg_mesh::service::MeshServerConfig;
+use smg_mesh::MeshServerConfig;
 fn parse_prefill_args() -> Vec<(String, Option<u16>)> {
     let args: Vec<String> = std::env::args().collect();
     let mut prefill_entries = Vec::new();
@@ -1159,8 +1159,12 @@ impl CliArgs {
             {
                 Some(MeshServerConfig {
                     self_name,
-                    self_addr: addr,
+                    // smg-mesh 1.4.1 split self_addr into bind/advertise; reuse
+                    // the same socket addr for both in single-NIC deployments.
+                    bind_addr: addr,
+                    advertise_addr: addr,
                     init_peer: peer,
+                    mtls_config: None,
                 })
             } else {
                 tracing::warn!("Invalid mesh server address, so mesh server will not be started");

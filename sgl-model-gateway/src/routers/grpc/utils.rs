@@ -26,10 +26,7 @@ use crate::{
         },
         generate::{GenerateFinishReason, GenerateFinishType},
     },
-    reasoning_parser::{
-        ParserFactory as ReasoningParserFactory, PooledParser as ReasoningPooledParser,
-        ReasoningParser,
-    },
+    reasoning_parser::{ParserFactory as ReasoningParserFactory, ReasoningParser},
     routers::{error, grpc::proto_wrapper::ProtoResponseVariant},
     tokenizer::{
         cache::CachedTokenizer,
@@ -42,6 +39,12 @@ use crate::{
         ParserFactory as ToolParserFactory, PooledParser as ToolPooledParser, ToolParser,
     },
 };
+
+/// reasoning-parser 1.3.1 dropped built-in pooling (parsers are created fresh
+/// per request). Keep the `Arc<Mutex<Box<dyn ReasoningParser>>>` shape so call
+/// sites that `.lock().await` stay unchanged.
+pub(crate) type ReasoningPooledParser =
+    Arc<tokio::sync::Mutex<Box<dyn ReasoningParser>>>;
 
 /// Resolve tokenizer from registry and cache it in request context.
 ///
@@ -776,22 +779,23 @@ pub(crate) fn get_reasoning_parser(
     configured_parser: Option<&str>,
     model: &str,
 ) -> ReasoningPooledParser {
-    if let Some(parser_name) = configured_parser {
+    let parser: Box<dyn ReasoningParser> = if let Some(parser_name) = configured_parser {
         // Use configured parser if specified
         reasoning_parser_factory
             .registry()
-            .get_pooled_parser(parser_name)
+            .create_parser(parser_name)
             .unwrap_or_else(|| {
                 warn!(
                     "Configured reasoning parser '{}' not found, falling back to model-based selection",
                     parser_name
                 );
-                reasoning_parser_factory.get_pooled(model)
+                reasoning_parser_factory.create(model)
             })
     } else {
         // Auto-detect based on model
-        reasoning_parser_factory.get_pooled(model)
-    }
+        reasoning_parser_factory.create(model)
+    };
+    Arc::new(tokio::sync::Mutex::new(parser))
 }
 
 /// Create a fresh reasoning parser instance (for streaming where state isolation is needed)

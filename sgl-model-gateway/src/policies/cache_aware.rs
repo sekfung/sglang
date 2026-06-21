@@ -64,7 +64,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use rand::Rng;
-use smg_mesh::{tree_ops::TreeOperation, OptionalMeshSyncManager};
+use crate::smg_mesh_compat::{tree_ops::TreeOperation, OptionalMeshSyncManager};
 use tracing::{debug, warn};
 
 use super::{
@@ -344,7 +344,7 @@ impl CacheAwarePolicy {
 
                 // Sync insert operation to mesh if enabled (no-op if mesh is not enabled)
                 if let Some(ref mesh_sync) = self.mesh_sync {
-                    use smg_mesh::tree_ops::TreeInsertOp;
+                    use crate::smg_mesh_compat::tree_ops::TreeInsertOp;
                     let op = TreeOperation::Insert(TreeInsertOp {
                         text: text.to_string(),
                         tenant: worker_url.to_string(),
@@ -451,7 +451,7 @@ impl LoadBalancingPolicy for CacheAwarePolicy {
 
                 // Sync insert operation to mesh if enabled (no-op if mesh is not enabled)
                 if let Some(ref mesh_sync) = self.mesh_sync {
-                    use smg_mesh::tree_ops::TreeInsertOp;
+                    use crate::smg_mesh_compat::tree_ops::TreeInsertOp;
                     let op = TreeOperation::Insert(TreeInsertOp {
                         text: text.to_string(),
                         tenant: workers[idx].url().to_string(),
@@ -476,7 +476,7 @@ impl LoadBalancingPolicy for CacheAwarePolicy {
 
                 // Sync removal to mesh if enabled (no-op if mesh is not enabled)
                 if let Some(ref mesh_sync) = self.mesh_sync {
-                    use smg_mesh::tree_ops::TreeRemoveOp;
+                    use crate::smg_mesh_compat::tree_ops::TreeRemoveOp;
                     let op = TreeOperation::Remove(TreeRemoveOp {
                         tenant: tenant_url.to_string(),
                     });
@@ -756,7 +756,7 @@ mod tests {
         use smg_mesh::{
             stores::StateStores,
             sync::MeshSyncManager,
-            tree_ops::{TreeInsertOp, TreeOperation},
+            crate::smg_mesh_compat::tree_ops::{TreeInsertOp, TreeOperation},
         };
 
         let stores = Arc::new(StateStores::with_self_name("node1".to_string()));
@@ -815,7 +815,7 @@ mod tests {
         use smg_mesh::{
             stores::StateStores,
             sync::MeshSyncManager,
-            tree_ops::{TreeInsertOp, TreeOperation},
+            crate::smg_mesh_compat::tree_ops::{TreeInsertOp, TreeOperation},
         };
 
         let stores = Arc::new(StateStores::with_self_name("node1".to_string()));
@@ -848,7 +848,7 @@ mod tests {
         use smg_mesh::{
             stores::StateStores,
             sync::MeshSyncManager,
-            tree_ops::{TreeInsertOp, TreeOperation},
+            crate::smg_mesh_compat::tree_ops::{TreeInsertOp, TreeOperation},
         };
 
         // Simulate two nodes

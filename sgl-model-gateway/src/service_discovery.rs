@@ -15,7 +15,7 @@ use kube::{
     Client,
 };
 use rustls;
-use smg_mesh::service::{
+use smg_mesh::{
     gossip::{NodeState, NodeStatus},
     ClusterState,
 };

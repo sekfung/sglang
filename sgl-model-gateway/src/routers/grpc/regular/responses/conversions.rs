@@ -99,7 +99,8 @@ pub(crate) fn responses_to_chat(req: &ResponsesRequest) -> Result<ChatCompletion
                             content: None,
                             name: None,
                             tool_calls: Some(vec![ToolCall {
-                                id: id.clone(),
+                                // openai-protocol 1.8.1: id is Option<String>
+                                id: id.clone().unwrap_or_default(),
                                 tool_type: "function".to_string(),
                                 function: FunctionCallResponse {
                                     name: name.clone(),
@@ -113,7 +114,7 @@ pub(crate) fn responses_to_chat(req: &ResponsesRequest) -> Result<ChatCompletion
                         if let Some(output_text) = output {
                             messages.push(ChatMessage::Tool {
                                 content: MessageContent::Text(output_text.clone()),
-                                tool_call_id: id.clone(),
+                                tool_call_id: id.clone().unwrap_or_default(),
                             });
                         }
                     }
@@ -328,7 +329,7 @@ pub(crate) fn chat_to_responses(
     if let Some(tool_calls) = &choice.message.tool_calls {
         for tool_call in tool_calls {
             output.push(ResponseOutputItem::FunctionToolCall {
-                id: tool_call.id.clone(),
+                id: Some(tool_call.id.clone()),
                 call_id: tool_call.id.clone(),
                 name: tool_call.function.name.clone(),
                 arguments: tool_call.function.arguments.clone().unwrap_or_default(),

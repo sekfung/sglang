@@ -15,10 +15,28 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use smg_mesh::{RateLimitConfig, GLOBAL_RATE_LIMIT_COUNTER_KEY, GLOBAL_RATE_LIMIT_KEY};
 use tracing::{info, warn};
 
 use crate::server::AppState;
+
+// smg-mesh 1.4.1 removed the built-in rate-limit config/keys; define locally.
+const GLOBAL_RATE_LIMIT_KEY: &str = "global_rate_limit";
+const GLOBAL_RATE_LIMIT_COUNTER_KEY: &str = "global_rate_limit_counter";
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct RateLimitConfig {
+    limit_per_second: u64,
+}
+
+/// Write a config value into the mesh CRDT kv namespace (replicates to peers).
+fn mesh_put(handler: &smg_mesh::MeshServerHandler, key: &str, value: Vec<u8>) {
+    handler.mesh_kv().configs().put(key, value);
+}
+
+/// Read a config value from the mesh CRDT kv namespace.
+fn mesh_get(handler: &smg_mesh::MeshServerHandler, key: &str) -> Option<Vec<u8>> {
+    handler.mesh_kv().configs().get(key)
+}
 
 /// Mesh cluster status response
 #[derive(Debug, Serialize, Deserialize)]
@@ -240,7 +258,7 @@ pub async fn update_app_config(
         )
             .into_response();
     };
-    handler.write_data(request.key.clone(), value);
+    mesh_put(handler, &request.key.clone(), value);
     info!("Updated app config: {}", request.key);
     (
         StatusCode::OK,
@@ -264,7 +282,7 @@ pub async fn get_app_config(
                 .into_response();
         }
     };
-    match handler.read_data(key.clone()) {
+    match mesh_get(handler, &key.clone()) {
         Some(value) => {
             // Return value as hex encoded string for JSON compatibility
             let hex_value: String = value.iter().map(|b| format!("{:02x}", b)).collect();
@@ -309,7 +327,7 @@ pub async fn set_global_rate_limit(
             }
         };
 
-        handler.write_data(GLOBAL_RATE_LIMIT_KEY.to_string(), config_bytes);
+        mesh_put(handler, &GLOBAL_RATE_LIMIT_KEY.to_string(), config_bytes);
         info!("Set global rate limit: {} req/s", request.limit_per_second);
 
         (
@@ -342,7 +360,7 @@ pub async fn get_global_rate_limit(State(app_state): State<Arc<AppState>>) -> Re
         }
     };
 
-    match handler.read_data(GLOBAL_RATE_LIMIT_KEY.to_string()) {
+    match mesh_get(handler, &GLOBAL_RATE_LIMIT_KEY.to_string()) {
         Some(value) => match serde_json::from_slice::<RateLimitConfig>(&value) {
             Ok(config) => (
                 StatusCode::OK,
@@ -390,8 +408,7 @@ pub async fn get_global_rate_limit_stats(State(app_state): State<Arc<AppState>>)
         }
     };
 
-    let config = handler
-        .read_data(GLOBAL_RATE_LIMIT_KEY.to_string())
+    let config = mesh_get(handler, GLOBAL_RATE_LIMIT_KEY)
         .and_then(|v| serde_json::from_slice::<RateLimitConfig>(&v).ok())
         .unwrap_or_default();
 

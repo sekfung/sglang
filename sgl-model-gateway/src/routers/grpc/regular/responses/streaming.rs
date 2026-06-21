@@ -300,7 +300,7 @@ impl StreamingResponseAccumulator {
                     // Ensure we have enough tool calls
                     while self.tool_calls.len() <= index {
                         self.tool_calls.push(ResponseOutputItem::FunctionToolCall {
-                            id: String::new(),
+                            id: Some(String::new()),
                             call_id: String::new(),
                             name: String::new(),
                             arguments: String::new(),
@@ -318,7 +318,8 @@ impl StreamingResponseAccumulator {
                     } = &mut self.tool_calls[index]
                     {
                         if let Some(delta_id) = &delta.id {
-                            id.push_str(delta_id);
+                            // openai-protocol 1.8.1: id is Option<String>
+                            id.get_or_insert_with(String::new).push_str(delta_id);
                         }
                         if let Some(function) = &delta.function {
                             if let Some(delta_name) = &function.name {
