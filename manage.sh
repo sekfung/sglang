@@ -18,24 +18,52 @@ COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 ACTION="${1:-up}"
 PROFILE="${2:-}"  # optional
 
+# --help / -h anywhere triggers usage
+for arg in "$@"; do
+  [[ "$arg" =~ ^(--help|-h)$ ]] && ACTION="help"
+done
+
 usage() {
-  echo "用法: $0 <action> [profile]"
-  echo "  action:  up | down | restart | logs | status | ps"
-  echo "  profile: 128k | 256k (不填只操作 gateway)"
-  echo ""
-  echo "示例:"
-  echo "  $0 up 256k         启动 256K worker + gateway"
-  echo "  $0 up              只启动 gateway"
-  echo "  $0 restart 256k    重启 256K + gateway"
-  echo "  $0 restart         只重启 gateway"
-  echo "  $0 down 256k       停止 256K + gateway"
-  exit 1
+  cat <<EOF
+用法: $0 <action> [profile]
+
+action:
+  up        启动服务
+  down      停止服务
+  restart   重启服务
+  logs      查看日志
+  status    查看状态 (同 ps)
+  ps        列出容器
+
+profile (可选, 不填只操作 gateway):
+  128k      DeepSeek-V4 128K worker
+  256k      DeepSeek-V4 256K worker
+
+示例:
+  $0 up 256k            启动 256K worker + gateway
+  $0 up                 只启动 gateway (无 worker)
+  $0 restart 256k       重启 256K worker + gateway
+  $0 restart            只重启 gateway (不重启 worker)
+  $0 down 256k          停止 256K worker + gateway
+  $0 logs 256k          查看 256K 服务日志 (实时跟踪)
+  $0 status             查看所有运行中的服务
+
+服务架构:
+  :8080  → gateway (OpenAI 兼容入口 + MCP 工具编排)
+            └─ grpc://:21000 → worker (DeepSeek-V4 推理)
+EOF
+  exit 0
 }
 
+[[ "$ACTION" == "help" ]] && usage
 [[ "$ACTION" =~ ^(up|down|restart|logs|status|ps)$ ]] || usage
 
+# Map status → ps (compose doesn't have a "status" subcommand)
+COMPOSE_ACTION="$ACTION"
+[[ "$COMPOSE_ACTION" == "status" ]] && COMPOSE_ACTION="ps"
+
 if [ -n "$PROFILE" ]; then
-  docker compose --profile "$PROFILE" -f "$COMPOSE_FILE" "$ACTION"
+  docker compose --profile "$PROFILE" -f "$COMPOSE_FILE" "$COMPOSE_ACTION"
 else
-  docker compose -f "$COMPOSE_FILE" "$ACTION"
+  docker compose -f "$COMPOSE_FILE" "$COMPOSE_ACTION"
 fi
