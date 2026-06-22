@@ -38,6 +38,54 @@ use crate::{
     tool_parser::{ParserFactory as ToolParserFactory, StreamingParseResult, ToolParser},
 };
 
+/// DeepSeek DSML tool-call block delimiters that the official tool-parser's
+/// streaming (incremental) deepseek_v4/v32 parser leaks into `normal_text`
+/// instead of consuming. They never appear in legitimate assistant content.
+const DSML_BLOCK_DELIMITERS: [&str; 2] = ["<｜DSML｜tool_calls>", "</｜DSML｜tool_calls>"];
+
+/// True when the configured tool parser is DeepSeek v4/v3.2 (DSML format).
+fn is_dsml_tool_parser(name: Option<&str>) -> bool {
+    name.map_or(false, |n| {
+        let n = n.to_lowercase().replace('_', "");
+        n.contains("deepseekv4") || n.contains("deepseekv32")
+    })
+}
+
+/// Remove leaked DSML tool-call block delimiters from streamed `normal_text`.
+///
+/// Appends `incoming` to the per-index `buffer`, drops any complete delimiter,
+/// and holds back a trailing partial delimiter plus the DSML framing whitespace
+/// right before it — so a delimiter split across chunks (e.g. "</｜DSML｜tool_c"
+/// + "alls>") is still caught and never surfaces as assistant content. The
+/// held-back remainder is only ever whitespace and/or an incomplete delimiter,
+/// so dropping it at end-of-stream matches the non-streaming parser's output.
+fn strip_dsml_block_delimiters(buffer: &mut String, incoming: &str) -> String {
+    buffer.push_str(incoming);
+
+    for tok in DSML_BLOCK_DELIMITERS {
+        while let Some(pos) = buffer.find(tok) {
+            buffer.replace_range(pos..pos + tok.len(), "");
+        }
+    }
+
+    // Find the start of a trailing partial delimiter (a suffix that is a proper
+    // prefix of a delimiter); char_indices ascends, so the first hit is longest.
+    let mut partial_start = buffer.len();
+    for (i, _) in buffer.char_indices() {
+        let suffix = &buffer[i..];
+        if DSML_BLOCK_DELIMITERS.iter().any(|t| t.starts_with(suffix)) {
+            partial_start = i;
+            break;
+        }
+    }
+
+    // Also hold back DSML framing whitespace immediately preceding it.
+    let hold_at = buffer[..partial_start].trim_end().len();
+    let emitted = buffer[..hold_at].to_string();
+    buffer.drain(..hold_at);
+    emitted
+}
+
 /// Shared streaming processor for both single and dual dispatch modes
 #[derive(Clone)]
 pub(crate) struct StreamingProcessor {
@@ -224,6 +272,9 @@ impl StreamingProcessor {
         type PooledToolParser = Arc<tokio::sync::Mutex<Box<dyn ToolParser>>>;
         let mut tool_parsers: HashMap<u32, PooledToolParser> = HashMap::new();
         let mut has_tool_calls: HashMap<u32, bool> = HashMap::new();
+        // Per-index buffer for stripping leaked DeepSeek DSML tool-call block
+        // delimiters from streamed normal_text (see strip_dsml_block_delimiters).
+        let mut dsml_normal_buffers: HashMap<u32, String> = HashMap::new();
 
         // Per-index stop decoders (each index needs its own state for n>1 support)
         let mut stop_decoders: HashMap<u32, StopSequenceDecoder> = HashMap::new();
@@ -404,6 +455,7 @@ impl StreamingProcessor {
                                 index,
                                 &mut tool_parsers,
                                 &mut has_tool_calls,
+                                &mut dsml_normal_buffers,
                                 tools.as_ref().unwrap(),
                                 request_id,
                                 model,
@@ -1214,6 +1266,7 @@ impl StreamingProcessor {
         index: u32,
         tool_parsers: &mut HashMap<u32, Arc<tokio::sync::Mutex<Box<dyn ToolParser>>>>,
         has_tool_calls: &mut HashMap<u32, bool>,
+        dsml_buffers: &mut HashMap<u32, String>,
         tools: &[Tool],
         request_id: &str,
         model: &str,
@@ -1245,6 +1298,18 @@ impl StreamingProcessor {
 
             match parser.parse_incremental(delta, tools).await {
                 Ok(StreamingParseResult { normal_text, calls }) => {
+                    // The official tool-parser deepseek_v4/v32 streaming parser
+                    // leaks the outer "</｜DSML｜tool_calls>" block delimiter
+                    // (often split across chunks) into normal_text; strip it so
+                    // it does not surface as assistant content.
+                    let normal_text = if is_dsml_tool_parser(
+                        self.configured_tool_parser.as_deref(),
+                    ) {
+                        let buf = dsml_buffers.entry(index).or_default();
+                        strip_dsml_block_delimiters(buf, &normal_text)
+                    } else {
+                        normal_text
+                    };
                     // Emit normal text if present
                     if !normal_text.is_empty() {
                         chunks.push(
