@@ -79,6 +79,10 @@ services:
       - --port
       - "8080"
     restart: unless-stopped
+    # Opt-in now: the 256k worker serves OpenAI on :8080 directly (official HTTP,
+    # no gateway). Start the魔改 gateway only with `--profile gateway`.
+    profiles:
+      - gateway
 
   # ---------------------------------------------------------------------------
   # SGLang gRPC Worker 128K (profile: 128k)
@@ -140,6 +144,10 @@ services:
   # SGLang gRPC Worker 256K (profile: 256k)
   # ---------------------------------------------------------------------------
   worker-256k:
+    # 魔改 build (keeps b12x fused MoE perf ~70 tok/s). Engine is exonerated:
+    # 魔改+native encoding_dsv4 = 0 empty tool args (same as official). Empty-arg
+    # bug was the gateway's Direct-JSON jinja, NOT the engine. So run魔改 in HTTP
+    # mode (native encoding) instead of through the gateway.
     image: docker.io/sekfung/sglang:local
     container_name: sglang-worker-256k
     network_mode: host
@@ -154,7 +162,6 @@ services:
               capabilities: [gpu]
     volumes:
       - ./:/src/sglang
-      - ../flashinfer:/src/flashinfer
       - /opt/models:/opt/models
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -165,6 +172,8 @@ services:
       - NCCL_SHM_DISABLE=0
       - NCCL_P2P_DISABLE=0
       - HF_ENDPOINT=https://hf-mirror.com
+      # b12x SM120 CuteDSL fused MoE (the魔改 perf path).
+      - SGLANG_OPT_USE_SM120_CUTEDSL_MOE=1
     command:
       - python3
       - -m
@@ -173,18 +182,19 @@ services:
       - /opt/models/sglang/sglang-256k.yml
       - --served-model-name
       - deepseek-v4-flash
-      - --grpc-mode
-      - --grpc-http-sidecar-port
-      - "21001"
+      # HTTP mode: worker is the OpenAI frontend directly (no gateway, no gRPC).
+      # tool-call-parser deepseekv4 -> native encoding_dsv4 (param-tag DSML),
+      # which fixes the empty-tool-arg bug the gateway's Direct-JSON jinja caused.
       - --host
       - 0.0.0.0
       - --port
-      - "21000"
+      - "8080"
+      - --tool-call-parser
+      - deepseekv4
+      - --reasoning-parser
+      - deepseek-v4
       - --enable-p2p
       - --trust-remote-code
-      - --enable-cache-report
-      - --enable-metrics
-      - --enable-request-time-stats-logging
       - --allow-auto-truncate
       - --enable-prefill-cp
       - --cp-strategy

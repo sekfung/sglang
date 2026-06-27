@@ -2,10 +2,14 @@
 # SGLang benchmark script - supports generated-shared-prefix, random, random-ids
 set -euo pipefail
 
-CONTAINER="${CONTAINER:-sglang-fi-src-128k}"
+# Stack now: gateway (OpenAI entry :8080) -> grpc worker :21000. Bench drives
+# the gateway end-to-end. Override CONTAINER/PORT/MODEL via env if needed.
+CONTAINER="${CONTAINER:-sglang-gateway}"
 HOST="${HOST:-127.0.0.1}"
-PORT="${PORT:-30000}"
+PORT="${PORT:-8080}"
 BASE_URL="http://${HOST}:${PORT}"
+MODEL="${MODEL:-deepseek-v4-flash}"
+TOKENIZER="${TOKENIZER:-/opt/models/deepseek-v4-flash}"
 
 # --- Dataset ---
 DATASET="${DATASET:-generated-shared-prefix}"   # generated-shared-prefix | random | random-ids
@@ -55,6 +59,8 @@ case "$DATASET" in
             "$CONTAINER" python3 -m sglang.bench_serving \
             --backend "$BENCH_BACKEND" \
             --base-url "$BASE_URL" \
+            --model "$MODEL" \
+            --tokenizer "$TOKENIZER" \
             --dataset-name generated-shared-prefix \
             --gsp-system-prompt-len "$SYSTEM_PROMPT_LEN" \
             --gsp-question-len "$GSP_QUESTION_LEN" \
@@ -75,6 +81,8 @@ case "$DATASET" in
             "$CONTAINER" python3 -m sglang.bench_serving \
             --backend "$BENCH_BACKEND" \
             --base-url "$BASE_URL" \
+            --model "$MODEL" \
+            --tokenizer "$TOKENIZER" \
             --dataset-name random \
             --dataset-path "${DATASET_PATH:-/tmp/sharegpt.json}" \
             --random-input-len "$INPUT_LEN" \
@@ -92,6 +100,8 @@ case "$DATASET" in
             "$CONTAINER" python3 -m sglang.bench_serving \
             --backend "$BENCH_BACKEND" \
             --base-url "$BASE_URL" \
+            --model "$MODEL" \
+            --tokenizer "$TOKENIZER" \
             --dataset-name random-ids \
             --random-input-len "$INPUT_LEN" \
             --random-output-len "$OUTPUT_LEN" \

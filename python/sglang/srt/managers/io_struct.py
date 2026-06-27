@@ -2042,7 +2042,6 @@ class GetLoadsReqInput(BaseReq, kw_only=True):
                 )
 
 
-@dataclass
 class WatchLoadUpdateReq(BaseReq):
     """Forward per-scheduler load metrics to the DataParallelController.
 

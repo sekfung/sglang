@@ -112,9 +112,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN --mount=type=cache,target=/root/.cargo/registry \
     --mount=type=cache,target=/root/.cargo/git \
     --mount=type=cache,target=/src/sglang/sgl-model-gateway/target \
-    cd /src/sglang/sgl-model-gateway/bindings/python \
+    git config --global http.proxy http://192.168.1.111:7890 \
+    && git config --global https.proxy http://192.168.1.111:7890 \
+    && cd /src/sglang/sgl-model-gateway/bindings/python \
     && CARGO_BUILD_JOBS=${MAX_JOBS} maturin build --release --out dist \
-    && python3 -m pip install --force-reinstall --no-deps dist/*.whl
+    && python3 -m pip install --force-reinstall --no-deps dist/*.whl \
+    && git config --global --unset http.proxy \
+    && git config --global --unset https.proxy
 
 # ===========================================================================
 # Stage 4: Runtime

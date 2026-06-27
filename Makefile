@@ -40,6 +40,7 @@ build: ## 构建本地镜像 (同时打 :local 与版本化标签)
 	@echo "  Versioned: $(VERSIONED_IMAGE)"
 	@echo "  Arch: $(TORCH_CUDA_ARCH_LIST)  MaxJobs: $(MAX_JOBS)"
 	docker build \
+	  --network=host \
 	  -f "$(DOCKERFILE)" -t "$(FULL_IMAGE)" -t "$(VERSIONED_IMAGE)" \
 	  --build-arg TORCH_CUDA_ARCH_LIST="$(TORCH_CUDA_ARCH_LIST)" \
 	  --build-arg MAX_JOBS="$(MAX_JOBS)" \
