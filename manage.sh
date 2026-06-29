@@ -3,6 +3,7 @@
 # SGLang + Gateway — 一键管理
 # =============================================================================
 #   ./manage.sh up 256k     # 启动 256K worker + gateway
+#   ./manage.sh up dspark   # 启动 DSPark worker
 #   ./manage.sh up           # 只启动 gateway (不加 worker)
 #   ./manage.sh down 256k   # 停止 256K + gateway
 #   ./manage.sh restart 256k # 重启 256K + gateway
@@ -40,13 +41,15 @@ action:
 profile (可选, 不填只操作 gateway):
   128k      DeepSeek-V4 128K worker
   256k      DeepSeek-V4 256K worker
+  dspark    DeepSeek-V4 Flash DSPark worker
 
 示例:
-  $0 up 256k            启动 256K worker + gateway
+  $0 up 256k            启动 256K worker
+  $0 up dspark          启动 DSPark worker
   $0 up                 只启动 gateway (无 worker)
-  $0 restart 256k       重启 256K worker + gateway
+  $0 restart 256k       重启 256K worker
   $0 restart            只重启 gateway (不重启 worker)
-  $0 down 256k          停止 256K worker + gateway
+  $0 down 256k          停止 256K worker
   $0 logs 256k          查看 256K 服务日志 (实时跟踪)
   $0 shell              进入 gateway 容器
   $0 shell 256k         进入 worker-256k 容器

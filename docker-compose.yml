@@ -161,7 +161,6 @@ services:
               count: all
               capabilities: [gpu]
     volumes:
-      - ./:/src/sglang
       - /opt/models:/opt/models
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -202,6 +201,65 @@ services:
     restart: unless-stopped
     profiles:
       - "256k"
+
+  # ---------------------------------------------------------------------------
+  # SGLang gRPC Worker DSPark (profile: dspark)
+  # ---------------------------------------------------------------------------
+  worker-dspark:
+    image: docker.io/sekfung/sglang:dspark
+    container_name: sglang-worker-dspark
+    network_mode: host
+    privileged: true
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./:/src/sglang
+      - /opt/models:/opt/models
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - CUDA_VISIBLE_DEVICES=0,1,2,3
+      - NCCL_IB_DISABLE=1
+      - NCCL_SHM_DISABLE=0
+      - NCCL_P2P_DISABLE=0
+      - HF_ENDPOINT=https://hf-mirror.com
+      - SGLANG_OPT_USE_SM120_CUTEDSL_MOE=1
+    command:
+      - python3
+      - -m
+      - sglang.launch_server
+      - --config
+      - /opt/models/sglang/sglang-dspark.yml
+      - --served-model-name
+      - deepseek-v4-flash-dspark
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --tool-call-parser
+      - deepseekv4
+      - --reasoning-parser
+      - deepseek-v4
+      - --enable-p2p
+      - --trust-remote-code
+      - --allow-auto-truncate
+      # DSpark indexes hidden states against the full sequence length, which is
+      # incompatible with context-parallel prefill (--enable-prefill-cp shards
+      # token positions round-robin across ranks → IndexKernel.cu out-of-bounds
+      # device-side assert during dspark _forward_prefill). PR #29538's validated
+      # config uses no CP. Overlap-schedule was ruled out (crashes either way);
+      # keep it disabled per the PR validation guidance.
+      - --disable-overlap-schedule
+    restart: unless-stopped
+    profiles:
+      - "dspark"
 
 volumes:
   pgdata:

@@ -1,9 +1,9 @@
-# SGLang 256K 最优配置
+# SGLang DSPark 配置 (基于 256K 最优配置)
 # 硬件: 4×RTX PRO 6000 (96GB)
-# 实测: 6 并发共享前缀 2,391 tok/s, TPOT 325ms, 1,335s 完成 12 请求
+# 模型: deepseek-v4-flash-dspark
 # 关键限制: DSA indexer buffer → chunk 必须 ≤1024, 否则 F.relu(score) OOM
-model-path: /opt/models/deepseek-v4-flash
-tokenizer-path: /opt/models/deepseek-v4-flash
+model-path: /opt/models/deepseek-v4-flash-dspark
+tokenizer-path: /opt/models/deepseek-v4-flash-dspark
 host: 0.0.0.0
 port: 30000
 
@@ -46,7 +46,12 @@ reasoning-parser: deepseek-v4
 watchdog-timeout: 3600
 log-level: info
 
-speculative-algorithm: EAGLE
+# --- DSpark 块级投机解码 (PR #29538) ---
+# DSpark 复用 target 模型的 fused hidden states，无需独立 draft 检查点。
+# block-size 是 --speculative-num-draft-tokens 的别名 (检查点 dspark_block_size=5)。
+# num-steps / eagle-topk 被 DSpark 固定为 1 (hook 会强制覆盖)。
+speculative-algorithm: DSPARK
+speculative-dspark-block-size: 5
+speculative-dspark-confidence-threshold: 0.0
 speculative-num-steps: 1
 speculative-eagle-topk: 1
-speculative-num-draft-tokens: 2

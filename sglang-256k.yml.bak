@@ -47,6 +47,6 @@ watchdog-timeout: 3600
 log-level: info
 
 speculative-algorithm: EAGLE
-speculative-num-steps: 1
+speculative-num-steps: 3
 speculative-eagle-topk: 1
-speculative-num-draft-tokens: 2
+speculative-num-draft-tokens: 4
