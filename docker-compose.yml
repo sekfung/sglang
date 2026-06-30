@@ -161,6 +161,8 @@ services:
               count: all
               capabilities: [gpu]
     volumes:
+      - ./:/src/sglang
+      - ../flashinfer:/src/flashinfer
       - /opt/models:/opt/models
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
