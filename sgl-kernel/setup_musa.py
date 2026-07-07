@@ -46,7 +46,7 @@ class _RepoInfo:
 _FLASHINFER_REPO = _RepoInfo(
     name="flashinfer",
     git_repository="https://github.com/flashinfer-ai/flashinfer.git",
-    git_tag="bc29697ba20b7e6bdb728ded98f04788e16ee021",
+    git_tag="19f1a41e6b21f0c422d775e377b6fdf9a1fc9d23",
     git_shallow=False,
 )
 
@@ -85,8 +85,6 @@ sources = [
     "csrc/elementwise/fused_add_rms_norm_kernel.mu",
     "csrc/grammar/apply_token_bitmask_inplace_cuda.cu",
     "csrc/moe/moe_align_kernel.cu",
-    "csrc/moe/moe_fused_gate_musa.cu",
-    "csrc/moe/kimi_k2_moe_fused_gate.cu",
     "csrc/moe/moe_sum.cu",
     "csrc/moe/moe_sum_reduce.cu",
     "csrc/moe/moe_topk_softmax_kernels.cu",

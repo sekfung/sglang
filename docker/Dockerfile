@@ -19,7 +19,11 @@ ARG PIP_DEFAULT_INDEX
 ARG UBUNTU_MIRROR
 ARG GITHUB_ARTIFACTORY=github.com
 ARG INSTALL_FLASHINFER_JIT_CACHE=0
-ARG FLASHINFER_VERSION=0.6.12
+ARG FLASHINFER_VERSION=0.6.14
+ARG FLASHINFER_WHL_INDEX=https://flashinfer.ai/whl
+# 国内可替换为国内镜像或本地 pip 源，例：
+# ARG FLASHINFER_WHL_INDEX=https://mirrors.aliyun.com/pypi/simple
+# ARG PYTORCH_CUDA_WHL_INDEX=https://mirrors.aliyun.com/pypi/simple
 ARG MOONCAKE_VERSION=0.3.11.post1
 ARG MSCCLPP_VERSION=sglang-v0.9.1
 #if need other arg please add in MOONCAKE_COMPILE_ARG
@@ -240,6 +244,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && touch README.md \
     && touch LICENSE \
     && python3 -m pip install --extra-index-url https://download.pytorch.org/whl/cu${CUINDEX} ".[${BUILD_TYPE}]" \
+    && python3 -m pip install flashinfer-cubin==${FLASHINFER_VERSION} --index-url ${FLASHINFER_WHL_INDEX} \
     && if [ "${CUDA_VERSION%%.*}" = "12" ]; then \
            pip list --format=freeze | awk -F'==' '/-cu13(==|$)/ {print $1}' \
                | xargs -r python3 -m pip uninstall -y && \

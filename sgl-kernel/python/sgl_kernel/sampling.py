@@ -16,13 +16,9 @@ def _top_k_renorm_probs_internal(
     maybe_top_k_arr: Optional[torch.Tensor],
     top_k_val: int,
 ) -> torch.Tensor:
-    probs = probs.float()
-    maybe_top_k_arr = maybe_top_k_arr.int() if maybe_top_k_arr is not None else None
-    renorm_probs = torch.empty_like(probs)
-    torch.ops.sgl_kernel.top_k_renorm_probs.default(
-        probs, renorm_probs, maybe_top_k_arr, top_k_val
-    )
-    return renorm_probs
+    if not _has_flashinfer:
+        raise ImportError("flashinfer.sampling is required for top_k_renorm_probs")
+    return _flashinfer_sampling.top_k_renorm_probs(probs, top_k_val)
 
 
 def top_k_renorm_probs(
@@ -67,13 +63,9 @@ def _top_p_renorm_probs_internal(
     maybe_top_p_arr: Optional[torch.Tensor],
     top_p_val: float,
 ) -> torch.Tensor:
-    probs = probs.float()
-    maybe_top_p_arr = maybe_top_p_arr.float() if maybe_top_p_arr is not None else None
-    renorm_probs = torch.empty_like(probs)
-    torch.ops.sgl_kernel.top_p_renorm_probs.default(
-        probs, renorm_probs, maybe_top_p_arr, top_p_val
-    )
-    return renorm_probs
+    if not _has_flashinfer:
+        raise ImportError("flashinfer.sampling is required for top_p_renorm_probs")
+    return _flashinfer_sampling.top_p_renorm_probs(probs, top_p_val)
 
 
 def top_p_renorm_probs(

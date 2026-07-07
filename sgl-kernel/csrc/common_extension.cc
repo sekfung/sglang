@@ -50,19 +50,19 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   m.def("cutlass_mla_get_workspace_size", &cutlass_mla_get_workspace_size);
 
   /*
+   * From csrc/infllm_v2
+   */
+  m.def(
+      "infllm_v2_max_pooling_1d_varlen(Tensor input, Tensor! output, Tensor cu_seqlens_q, Tensor cu_seqlens_k, "
+      "Tensor cache_lens, int max_seqlen_q, int max_seqlen_k, int kernel_size, int stride, int padding, "
+      "int block_size, int local_blocks, int init_blocks, int total_q) -> ()");
+  m.impl("infllm_v2_max_pooling_1d_varlen", torch::kCUDA, &infllm_v2_max_pooling_1d_varlen);
+
+  /*
    * From csrc/elementwise
    */
-  m.def("rmsnorm(Tensor! output, Tensor input, Tensor weight, float eps, bool enable_pdl) -> ()");
-  m.impl("rmsnorm", torch::kCUDA, &rmsnorm);
-
   m.def("fused_add_rmsnorm(Tensor! input, Tensor! residual, Tensor weight, float eps, bool enable_pdl) -> ()");
   m.impl("fused_add_rmsnorm", torch::kCUDA, &sgl_fused_add_rmsnorm);
-
-  m.def("gemma_rmsnorm(Tensor! output, Tensor input, Tensor weight, float eps, bool enable_pdl) -> ()");
-  m.impl("gemma_rmsnorm", torch::kCUDA, &gemma_rmsnorm);
-
-  m.def("gemma_fused_add_rmsnorm(Tensor! input, Tensor! residual, Tensor weight, float eps, bool enable_pdl) -> ()");
-  m.impl("gemma_fused_add_rmsnorm", torch::kCUDA, &gemma_fused_add_rmsnorm);
 
   m.def("silu_and_mul(Tensor! out, Tensor input) -> ()");
   m.impl("silu_and_mul", torch::kCUDA, &silu_and_mul);
@@ -171,17 +171,9 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   m.def("moe_sum(Tensor input, Tensor! output) -> ()");
   m.impl("moe_sum", torch::kCUDA, &moe_sum);
 
-  m.def(
-      "moe_fused_gate(Tensor input, Tensor bias, int num_expert_group, int topk_group, int topk, int "
-      "num_fused_shared_experts, float routed_scaling_factor, bool apply_routed_scaling_factor_on_output) -> "
-      "(Tensor[])");
-  m.impl("moe_fused_gate", torch::kCUDA, &moe_fused_gate);
-
-  m.def(
-      "kimi_k2_moe_fused_gate(Tensor input, Tensor bias, int topk, bool renormalize, "
-      "float routed_scaling_factor, bool apply_routed_scaling_factor_on_output) -> "
-      "(Tensor[])");
-  m.impl("kimi_k2_moe_fused_gate", torch::kCUDA, &kimi_k2_moe_fused_gate);
+  // moe_fused_gate / kimi_k2_moe_fused_gate (AOT) retired: the CUDA gate/topk path
+  // now routes through the unified Triton router
+  // (python/sglang/jit_kernel/moe_fused_gate.py).
 
   m.def(
       "fp8_blockwise_scaled_grouped_mm(Tensor output, Tensor a_ptrs, Tensor b_ptrs, Tensor out_ptrs, Tensor "
@@ -353,12 +345,6 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "int cublas_handle) -> ()",
       {at::Tag::needs_fixed_stride_order});
   m.impl("bmm_fp8", torch::kCUDA, &bmm_fp8);
-
-  m.def("top_k_renorm_probs(Tensor probs, Tensor! renorm_probs, Tensor? maybe_top_k_arr, int top_k_val) -> ()");
-  m.impl("top_k_renorm_probs", torch::kCUDA, &top_k_renorm_probs);
-
-  m.def("top_p_renorm_probs(Tensor probs, Tensor! renorm_probs, Tensor? maybe_top_p_arr, float top_p_val) -> ()");
-  m.impl("top_p_renorm_probs", torch::kCUDA, &top_p_renorm_probs);
 
   /*
    * From Sparse Flash Attention
