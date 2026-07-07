@@ -20,12 +20,9 @@ def _rmsnorm_internal(
     out: Optional[torch.Tensor],
     enable_pdl: Optional[bool],
 ) -> torch.Tensor:
-    if out is None:
-        out = torch.empty_like(input)
-    if enable_pdl is None:
-        enable_pdl = is_arch_support_pdl()
-    torch.ops.sgl_kernel.rmsnorm.default(out, input, weight, eps, enable_pdl)
-    return out
+    if not _has_flashinfer:
+        raise ImportError("flashinfer.norm is required for rmsnorm")
+    return _flashinfer_norm.rmsnorm(input, weight, eps, out, enable_pdl)
 
 
 def _fused_add_rmsnorm_internal(
@@ -49,12 +46,9 @@ def _gemma_rmsnorm_internal(
     out: Optional[torch.Tensor],
     enable_pdl: Optional[bool],
 ) -> torch.Tensor:
-    if out is None:
-        out = torch.empty_like(input)
-    if enable_pdl is None:
-        enable_pdl = is_arch_support_pdl()
-    torch.ops.sgl_kernel.gemma_rmsnorm.default(out, input, weight, eps, enable_pdl)
-    return out
+    if not _has_flashinfer:
+        raise ImportError("flashinfer.norm is required for gemma_rmsnorm")
+    return _flashinfer_norm.gemma_rmsnorm(input, weight, eps, out, enable_pdl)
 
 
 def _gemma_fused_add_rmsnorm_internal(
@@ -64,9 +58,9 @@ def _gemma_fused_add_rmsnorm_internal(
     eps: float,
     enable_pdl: Optional[bool],
 ) -> None:
-    if enable_pdl is None:
-        enable_pdl = is_arch_support_pdl()
-    torch.ops.sgl_kernel.gemma_fused_add_rmsnorm.default(
+    if not _has_flashinfer:
+        raise ImportError("flashinfer.norm is required for gemma_fused_add_rmsnorm")
+    _flashinfer_norm.gemma_fused_add_rmsnorm(
         input, residual, weight, eps, enable_pdl
     )
 
@@ -104,22 +98,7 @@ def rmsnorm(
     output: torch.Tensor
         Normalized tensor, shape (batch_size, hidden_size).
     """
-    # torch.compiler.is_dynamo_compiling(): FlashInfer norm paths are not safe under
-    # torch.compile(..., fullgraph=True). Dynamo traces into FlashInfer's JIT module
-    # loading path, which calls Path.exists() / os.stat() — both untraceable — causing
-    # the entire compilation to fail. We fall back to the internal implementation while
-    # tracing as a temporary workaround. Once the upstream fix is merged and we upgrade
-    # FlashInfer, this check can be removed.
-    # See: https://github.com/flashinfer-ai/flashinfer/issues/2734
-    #      https://github.com/flashinfer-ai/flashinfer/pull/2733
-    if (
-        _has_flashinfer
-        and input.dtype in _FLASHINFER_NORM_SUPPORTED_DTYPES
-        and not torch.compiler.is_dynamo_compiling()
-    ):
-        return _flashinfer_norm.rmsnorm(input, weight, eps, out, enable_pdl)
-    else:
-        return _rmsnorm_internal(input, weight, eps, out, enable_pdl)
+    return _flashinfer_norm.rmsnorm(input, weight, eps, out, enable_pdl)
 
 
 def fused_add_rmsnorm(
@@ -193,14 +172,7 @@ def gemma_rmsnorm(
     output: torch.Tensor
         Gemma Normalized tensor, shape (batch_size, hidden_size).
     """
-    if (
-        _has_flashinfer
-        and input.dtype in _FLASHINFER_NORM_SUPPORTED_DTYPES
-        and not torch.compiler.is_dynamo_compiling()
-    ):
-        return _flashinfer_norm.gemma_rmsnorm(input, weight, eps, out, enable_pdl)
-    else:
-        return _gemma_rmsnorm_internal(input, weight, eps, out, enable_pdl)
+    return _flashinfer_norm.gemma_rmsnorm(input, weight, eps, out, enable_pdl)
 
 
 def gemma_fused_add_rmsnorm(
@@ -233,16 +205,9 @@ def gemma_fused_add_rmsnorm(
         <https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#programmatic-dependent-launch-and-synchronization>`_
         If None, will be automatically enabled on Hopper architecture.
     """
-    if (
-        _has_flashinfer
-        and input.dtype in _FLASHINFER_NORM_SUPPORTED_DTYPES
-        and not torch.compiler.is_dynamo_compiling()
-    ):
-        _flashinfer_norm.gemma_fused_add_rmsnorm(
-            input, residual, weight, eps, enable_pdl
-        )
-    else:
-        _gemma_fused_add_rmsnorm_internal(input, residual, weight, eps, enable_pdl)
+    _flashinfer_norm.gemma_fused_add_rmsnorm(
+        input, residual, weight, eps, enable_pdl
+    )
 
 
 def _check_shape(input: torch.Tensor, output: torch.Tensor) -> None:

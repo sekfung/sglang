@@ -61,17 +61,8 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
   /*
    * From csrc/elementwise
    */
-  m.def("rmsnorm(Tensor! output, Tensor input, Tensor weight, float eps, bool enable_pdl) -> ()");
-  m.impl("rmsnorm", torch::kCUDA, &rmsnorm);
-
   m.def("fused_add_rmsnorm(Tensor! input, Tensor! residual, Tensor weight, float eps, bool enable_pdl) -> ()");
   m.impl("fused_add_rmsnorm", torch::kCUDA, &sgl_fused_add_rmsnorm);
-
-  m.def("gemma_rmsnorm(Tensor! output, Tensor input, Tensor weight, float eps, bool enable_pdl) -> ()");
-  m.impl("gemma_rmsnorm", torch::kCUDA, &gemma_rmsnorm);
-
-  m.def("gemma_fused_add_rmsnorm(Tensor! input, Tensor! residual, Tensor weight, float eps, bool enable_pdl) -> ()");
-  m.impl("gemma_fused_add_rmsnorm", torch::kCUDA, &gemma_fused_add_rmsnorm);
 
   m.def("silu_and_mul(Tensor! out, Tensor input) -> ()");
   m.impl("silu_and_mul", torch::kCUDA, &silu_and_mul);
@@ -354,12 +345,6 @@ TORCH_LIBRARY_FRAGMENT(sgl_kernel, m) {
       "int cublas_handle) -> ()",
       {at::Tag::needs_fixed_stride_order});
   m.impl("bmm_fp8", torch::kCUDA, &bmm_fp8);
-
-  m.def("top_k_renorm_probs(Tensor probs, Tensor! renorm_probs, Tensor? maybe_top_k_arr, int top_k_val) -> ()");
-  m.impl("top_k_renorm_probs", torch::kCUDA, &top_k_renorm_probs);
-
-  m.def("top_p_renorm_probs(Tensor probs, Tensor! renorm_probs, Tensor? maybe_top_p_arr, float top_p_val) -> ()");
-  m.impl("top_p_renorm_probs", torch::kCUDA, &top_p_renorm_probs);
 
   /*
    * From Sparse Flash Attention

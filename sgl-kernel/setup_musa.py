@@ -46,7 +46,7 @@ class _RepoInfo:
 _FLASHINFER_REPO = _RepoInfo(
     name="flashinfer",
     git_repository="https://github.com/flashinfer-ai/flashinfer.git",
-    git_tag="bc29697ba20b7e6bdb728ded98f04788e16ee021",
+    git_tag="19f1a41e6b21f0c422d775e377b6fdf9a1fc9d23",
     git_shallow=False,
 )
 

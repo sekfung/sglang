@@ -73,8 +73,8 @@ FetchContent_Populate(repo-triton)
 # flashinfer
 FetchContent_Declare(
     repo-flashinfer
-    URL      https://${GITHUB_ARTIFACTORY}/flashinfer-ai/flashinfer/archive/bc29697ba20b7e6bdb728ded98f04788e16ee021.tar.gz
-    URL_HASH SHA256=931dfd118f4b6de8c7d98702153c7c03840139170af21a07607693bd9749744d
+    URL      https://${GITHUB_ARTIFACTORY}/flashinfer-ai/flashinfer/archive/19f1a41e6b21f0c422d775e377b6fdf9a1fc9d23.tar.gz
+    URL_HASH SHA256=6850b0e5d07bed32b3613d4c7da50e0fc36542239a5ff5188b524494e9edda75
 )
 FetchContent_Populate(repo-flashinfer)
 
@@ -299,9 +299,6 @@ set(SOURCES
     "csrc/speculative/ngram_utils.cu"
     "csrc/speculative/packbit.cu"
     "csrc/speculative/speculative_sampling.cu"
-
-    "${repo-flashinfer_SOURCE_DIR}/csrc/norm.cu"
-    "${repo-flashinfer_SOURCE_DIR}/csrc/renorm.cu"
 
     "${repo-flash-attention_SOURCE_DIR}/csrc/flash_attn/src/flash_fwd_sparse_hdim128_bf16_causal_sm80.cu"
     "${repo-flash-attention_SOURCE_DIR}/csrc/flash_attn/src/flash_fwd_sparse_hdim128_bf16_sm80.cu"
