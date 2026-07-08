@@ -1,7 +1,7 @@
 # =============================================================================
-# SGLang + FlashInfer Local Build (based on sglang:dev-cu13)
+# SGLang + FlashInfer 0.6.14 (Official Wheel Build)
 # =============================================================================
-# Build context: /opt/models (parent of sglang/ and flashinfer/)
+# Build context: /opt/models (parent of sglang/)
 #
 #   docker build -f sglang/Dockerfile.local -t sglang:local /opt/models
 #
@@ -29,28 +29,26 @@ RUN if [ "$USE_MIRRORS" = "1" ] && [ -n "$PIP_INDEX_URL" ]; then \
       python3 -m pip config set global.index-url "$PIP_INDEX_URL"; \
     fi
 
-# ===========================================================================
-# Stage 2: FlashInfer (built from local source)
-# ===========================================================================
-FROM base AS flashinfer_builder
-
-ARG MAX_JOBS
-ARG TORCH_CUDA_ARCH_LIST
-
-COPY flashinfer/ /src/flashinfer/
+# ---------------------------------------------------------------------------
+# Install official FlashInfer 0.6.14 from pip wheel
+# cuda-tile>=1.4.0 is a new dep of flashinfer 0.6.14, only on PyPI (not in
+# flashinfer.ai/whl nor mirrors), so we pre-install it from PyPI first.
+# ---------------------------------------------------------------------------
+ARG FLASHINFER_VERSION=0.6.14
+ARG FLASHINFER_WHL_INDEX=https://flashinfer.ai/whl
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    cd /src/flashinfer \
-    && python3 -m pip install nvidia-cutlass-dsl \
-    && MAX_JOBS=${MAX_JOBS} \
-       TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
-       FLASHINFER_USE_PRECOMPILED=0 \
-       python3 -m pip install --no-build-isolation ".[cu13]"
+    python3 -m pip uninstall -y flashinfer flashinfer_python flashinfer_cubin flashinfer_jit_cache cuda-tile 2>/dev/null || true \
+    && python3 -m pip install cuda-tile>=1.4.0 --index-url https://pypi.org/simple/ \
+    && python3 -m pip install flashinfer-cubin==${FLASHINFER_VERSION} --index-url ${FLASHINFER_WHL_INDEX} \
+    && python3 -m pip install flashinfer-python==${FLASHINFER_VERSION} \
+         --index-url ${FLASHINFER_WHL_INDEX} \
+         --extra-index-url https://pypi.org/simple/
 
 # ===========================================================================
-# Stage 3: SGLang (built from local source)
+# Stage 2: SGLang (built from local source)
 # ===========================================================================
-FROM flashinfer_builder AS sglang_builder
+FROM base AS sglang_builder
 
 ARG USE_MIRRORS
 ARG HF_ENDPOINT
@@ -62,22 +60,24 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && python3 -m pip install --no-build-isolation -e ".[all]"
 
 # ---------------------------------------------------------------------------
-# Force-reinstall FlashInfer from local source (sglang ".[all]" pulls
-# flashinfer from PyPI which overwrites our locally built version).
-# Use non-editable wheel install so CUDA JIT sources are at the right paths.
+# Force-reinstall official FlashInfer 0.6.14 (sglang ".[all]" may pull a
+# different flashinfer version from PyPI which overwrites ours).
 # ---------------------------------------------------------------------------
+ARG FLASHINFER_VERSION=0.6.14
+ARG FLASHINFER_WHL_INDEX=https://flashinfer.ai/whl
+
 RUN --mount=type=cache,target=/root/.cache/pip \
-    cd /src/flashinfer \
-    && python3 -m pip uninstall -y flashinfer flashinfer_python flashinfer_cubin flashinfer_jit_cache 2>/dev/null || true \
-    && MAX_JOBS=${MAX_JOBS} \
-       TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST}" \
-       FLASHINFER_USE_PRECOMPILED=0 \
-       python3 -m pip install --no-build-isolation --no-deps .[cu13]
+    python3 -m pip uninstall -y flashinfer flashinfer_python flashinfer_cubin flashinfer_jit_cache cuda-tile 2>/dev/null || true \
+    && python3 -m pip install cuda-tile>=1.4.0 --index-url https://pypi.org/simple/ \
+    && python3 -m pip install flashinfer-cubin==${FLASHINFER_VERSION} --index-url ${FLASHINFER_WHL_INDEX} \
+    && python3 -m pip install flashinfer-python==${FLASHINFER_VERSION} \
+         --index-url ${FLASHINFER_WHL_INDEX} \
+         --extra-index-url https://pypi.org/simple/
 
 RUN mkdir -p /root/.cache/huggingface /root/.cache/sglang /root/.cache/torch
 
 # ===========================================================================
-# Stage 3.5: Gateway/Router (rebuilt from local source)
+# Stage 3: Gateway/Router (rebuilt from local source)
 # ===========================================================================
 # The base image ships sglang-router 0.3.2 with tool-parser 1.0.0, which
 # lacks deepseekv4 DSML support.  Rebuild from the local gateway source

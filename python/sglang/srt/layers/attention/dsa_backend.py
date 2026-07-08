@@ -2813,6 +2813,12 @@ class DeepseekSparseAttnBackend(
                     and forward_batch is not None
                     and forward_batch.forward_mode == ForwardMode.EXTEND
                 ):
+                    device_sm = get_device_sm()
+                    # flashmla_sparse kernel is only supported on SM90a/SM100f;
+                    # SM120+ must fall back to flashmla_kv.
+                    if device_sm >= 120:
+                        self.dsa_prefill_impl = "flashmla_kv"
+                        return
                     total_kv_tokens = forward_batch.seq_lens_sum
                     total_q_tokens = forward_batch.extend_num_tokens
                     # Heuristic based on benchmarking flashmla_kv vs flashmla_sparse + dequantize_k_cache_paged
@@ -2821,8 +2827,12 @@ class DeepseekSparseAttnBackend(
                         return
                 self.dsa_prefill_impl = "flashmla_kv"
             else:
-                # bf16 kv cache
-                self.dsa_prefill_impl = "flashmla_sparse"
+                # bf16 kv cache — flashmla_sparse also unsupported on SM120+
+                device_sm = get_device_sm()
+                if device_sm >= 120:
+                    self.dsa_prefill_impl = "flashmla_kv"
+                else:
+                    self.dsa_prefill_impl = "flashmla_sparse"
 
     def get_topk_transform_method(
         self, forward_mode: Optional[ForwardMode] = None
